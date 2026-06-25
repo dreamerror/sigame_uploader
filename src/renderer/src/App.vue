@@ -32,11 +32,15 @@ const lastOutputPath = ref('')
 const progressMessage = ref('')
 const elapsedSeconds = ref(0)
 const previewUrl = ref('')
+const previewRenderKey = ref(0)
 const playerRef = ref<HTMLVideoElement | null>(null)
 const currentTime = ref(0)
 const isPlayingSelection = ref(false)
 const previewError = ref('')
 let progressTimer: number | undefined
+let autoPreviewRetryTimer: number | undefined
+let lastPreviewWasAutomatic = false
+let autoPreviewRetryUsed = false
 
 const durationLabel = computed(() => {
   if (!metadata.value?.durationSeconds) {
@@ -72,6 +76,14 @@ const selectedQualityLabel = computed(
   () => videoQualityOptions.find((option) => option.value === videoQuality.value)?.label ?? videoQuality.value
 )
 const exportLabel = computed(() => (exportFormat.value === 'mp4' ? `MP4 ${selectedQualityLabel.value}` : 'MP3'))
+const selectedDurationSeconds = computed(() => {
+  if (startSeconds.value === undefined || endSeconds.value === undefined) {
+    return 0
+  }
+
+  return roundToMilliseconds(Math.max(0, endSeconds.value - startSeconds.value))
+})
+const selectedDurationLabel = computed(() => formatTimestamp(selectedDurationSeconds.value))
 
 const outputFileName = computed(() => {
   if (!metadata.value) {
@@ -137,6 +149,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   stopProgress()
+  clearAutoPreviewRetry()
 })
 
 async function fetchMetadata(): Promise<void> {
@@ -149,10 +162,14 @@ async function fetchMetadata(): Promise<void> {
   clearStatus()
   metadata.value = null
   previewUrl.value = ''
+  previewError.value = ''
+  clearAutoPreviewRetry()
+  autoPreviewRetryUsed = false
   currentTime.value = 0
   lastOutputPath.value = ''
   isLoadingMetadata.value = true
   startProgress('Получаю метаданные через yt-dlp. При медленной сети или VPN это может занять до двух минут.')
+  let shouldPreparePreview = false
 
   try {
     const result = await api.fetchMetadata(url.value)
@@ -167,16 +184,20 @@ async function fetchMetadata(): Promise<void> {
     ensureDefaultSelection(result.data.durationSeconds)
     statusKind.value = 'success'
     statusMessage.value = 'Метаданные загружены.'
-    void preparePreview({ auto: true })
+    shouldPreparePreview = true
   } catch (error) {
     showUnexpectedError(error, 'Не удалось завершить запрос метаданных.')
   } finally {
     isLoadingMetadata.value = false
     stopProgress()
   }
+
+  if (shouldPreparePreview) {
+    void preparePreview({ auto: true })
+  }
 }
 
-async function preparePreview(options: { auto?: boolean } = {}): Promise<boolean> {
+async function preparePreview(options: { auto?: boolean; retry?: boolean } = {}): Promise<boolean> {
   if (!metadata.value) {
     return false
   }
@@ -191,12 +212,18 @@ async function preparePreview(options: { auto?: boolean } = {}): Promise<boolean
     clearStatus()
   }
 
+  clearAutoPreviewRetry()
   previewUrl.value = ''
   previewError.value = ''
   isPreparingPreview.value = true
+  currentTime.value = 0
+  isPlayingSelection.value = false
+  lastPreviewWasAutomatic = Boolean(options.auto)
   startProgress(
     options.auto
-      ? 'Автоматически готовлю preview через yt-dlp.'
+      ? options.retry
+        ? 'Первый preview-поток не открылся. Пробую обновить preview автоматически.'
+        : 'Автоматически готовлю preview через yt-dlp.'
       : 'Готовлю preview через yt-dlp и локальный proxy. Это может зависеть от сети и VPN.'
   )
 
@@ -209,12 +236,14 @@ async function preparePreview(options: { auto?: boolean } = {}): Promise<boolean
     }
 
     previewUrl.value = result.data.previewUrl
+    previewRenderKey.value += 1
     if (!options.auto) {
       statusKind.value = 'success'
       statusMessage.value = 'Preview готов.'
     }
 
     await nextTick()
+    playerRef.value?.load()
     return true
   } catch (error) {
     showUnexpectedError(error, 'Не удалось подготовить preview.')
@@ -275,6 +304,18 @@ function onPlayerEnded(): void {
 
 function onPlayerError(): void {
   isPlayingSelection.value = false
+
+  if (lastPreviewWasAutomatic && !autoPreviewRetryUsed && metadata.value && !isPreparingPreview.value) {
+    autoPreviewRetryUsed = true
+    previewError.value = 'Первый preview-поток не открылся. Автоматически пробую обновить preview.'
+    clearAutoPreviewRetry()
+    autoPreviewRetryTimer = window.setTimeout(() => {
+      autoPreviewRetryTimer = undefined
+      void preparePreview({ auto: true, retry: true })
+    }, 500)
+    return
+  }
+
   previewError.value =
     'Плеер не смог открыть локальный preview-поток. Можно обновить preview или продолжить ручной выбор и экспорт без preview.'
 }
@@ -322,6 +363,24 @@ function setStartFromCurrent(): void {
 
 function setEndFromCurrent(): void {
   setEndSeconds(currentTime.value)
+}
+
+function seekToSelectionStart(): void {
+  if (startSeconds.value === undefined) {
+    showInvalidTimestampStatus()
+    return
+  }
+
+  seekPlayer(startSeconds.value)
+}
+
+function seekToSelectionEnd(): void {
+  if (endSeconds.value === undefined) {
+    showInvalidTimestampStatus()
+    return
+  }
+
+  seekPlayer(endSeconds.value)
 }
 
 function nudgeStart(delta: number): void {
@@ -518,6 +577,13 @@ function stopProgress(): void {
   elapsedSeconds.value = 0
 }
 
+function clearAutoPreviewRetry(): void {
+  if (autoPreviewRetryTimer !== undefined) {
+    window.clearTimeout(autoPreviewRetryTimer)
+    autoPreviewRetryTimer = undefined
+  }
+}
+
 function sanitizeOutputBaseName(value: string): string {
   const fallback = `sigame_clip_${new Date().toISOString().replace(/[:.]/g, '-')}`
   const candidate = value
@@ -609,6 +675,7 @@ function clamp(value: number, min: number, max: number): number {
         <video
           v-if="previewUrl"
           ref="playerRef"
+          :key="previewRenderKey"
           class="media-player"
           :src="previewUrl"
           controls
@@ -619,18 +686,31 @@ function clamp(value: number, min: number, max: number): number {
           @ended="onPlayerEnded"
           @error="onPlayerError"
         ></video>
+        <div v-else class="media-player-placeholder" :class="{ loading: isPreparingPreview }">
+          <strong>{{ isPreparingPreview ? 'Preview готовится' : 'Preview ещё не готов' }}</strong>
+          <span>{{ isPreparingPreview ? 'Плеер появится после подготовки потока.' : 'Можно задать start/end вручную и экспортировать без preview.' }}</span>
+        </div>
         <p v-if="previewError" class="inline-error">{{ previewError }}</p>
         <p v-else class="path-hint">
           Preview идёт через локальный streaming proxy без временных файлов. Если preview не загрузится, ручной ввод и экспорт всё равно доступны.
         </p>
 
-        <div v-if="previewUrl" class="player-controls">
-          <span>Позиция: {{ formatTimestamp(currentTime) }}</span>
-          <button type="button" @click="setStartFromCurrent">Начало из позиции</button>
-          <button type="button" @click="setEndFromCurrent">Конец из позиции</button>
-          <button type="button" :disabled="!canUseSelectionControls" @click="playSelectedSegment">
-            Проиграть отрезок
-          </button>
+        <div v-if="previewUrl" class="selection-toolbar">
+          <div class="selection-stats">
+            <span>Позиция: {{ formatTimestamp(currentTime) }}</span>
+            <span>Отрезок: {{ selectedDurationLabel }}</span>
+            <span>Start: {{ startSeconds !== undefined ? formatTimestamp(startSeconds) : '—' }}</span>
+            <span>End: {{ endSeconds !== undefined ? formatTimestamp(endSeconds) : '—' }}</span>
+          </div>
+          <div class="player-controls">
+            <button type="button" :disabled="!canUseSelectionControls" @click="seekToSelectionStart">К началу</button>
+            <button type="button" :disabled="!canUseSelectionControls" @click="seekToSelectionEnd">К концу</button>
+            <button type="button" @click="setStartFromCurrent">Начало из позиции</button>
+            <button type="button" @click="setEndFromCurrent">Конец из позиции</button>
+            <button type="button" :disabled="!canUseSelectionControls" @click="playSelectedSegment">
+              Проиграть отрезок
+            </button>
+          </div>
         </div>
 
         <TimelineSelector

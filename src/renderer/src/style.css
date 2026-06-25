@@ -166,6 +166,60 @@ h2 {
   background: #111827;
 }
 
+.media-player-placeholder {
+  display: grid;
+  min-height: 220px;
+  place-content: center;
+  gap: 8px;
+  border: 1px solid #d6dde7;
+  border-radius: 6px;
+  padding: 22px;
+  color: #dbeafe;
+  text-align: center;
+  background: #111827;
+}
+
+.media-player-placeholder strong {
+  color: #ffffff;
+  font-size: 1rem;
+}
+
+.media-player-placeholder span {
+  color: #b6c3d2;
+  font-size: 0.9rem;
+}
+
+.media-player-placeholder.loading {
+  background:
+    linear-gradient(90deg, rgba(37, 99, 235, 0.18), rgba(4, 120, 87, 0.16)),
+    #111827;
+}
+
+.selection-toolbar {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #d6dde7;
+  border-radius: 6px;
+  padding: 12px;
+  background: #f8fafc;
+}
+
+.selection-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.selection-stats span {
+  border: 1px solid #d6dde7;
+  border-radius: 6px;
+  padding: 5px 8px;
+  color: #344252;
+  background: #ffffff;
+  font-size: 0.84rem;
+  font-weight: 750;
+}
+
 .player-controls {
   display: flex;
   flex-wrap: wrap;
@@ -344,26 +398,32 @@ h2 {
 
 .timeline-track {
   position: relative;
-  height: 34px;
+  height: 40px;
   border-radius: 6px;
   background: #d8e2ef;
   cursor: pointer;
   touch-action: none;
 }
 
+.timeline-track:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.18);
+  outline-offset: 3px;
+}
+
 .timeline-selection {
   position: absolute;
-  top: 8px;
-  height: 18px;
+  top: 9px;
+  height: 22px;
   border-radius: 4px;
   background: rgba(37, 99, 235, 0.32);
 }
 
 .timeline-current {
   position: absolute;
+  z-index: 2;
   top: 4px;
   width: 2px;
-  height: 26px;
+  height: 32px;
   background: #111827;
   transform: translateX(-50%);
 }
@@ -381,6 +441,7 @@ h2 {
   background: #2563eb;
   transform: translate(-50%, -50%);
   cursor: ew-resize;
+  z-index: 3;
 }
 
 .timeline-handle.end {

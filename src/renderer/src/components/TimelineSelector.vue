@@ -28,6 +28,7 @@ const startPercent = computed(() => toPercent(safeStart.value))
 const endPercent = computed(() => toPercent(safeEnd.value))
 const currentPercent = computed(() => toPercent(clamp(props.currentTime, 0, safeDuration.value)))
 const selectedWidth = computed(() => Math.max(0, endPercent.value - startPercent.value))
+const selectedDuration = computed(() => roundToMilliseconds(Math.max(0, safeEnd.value - safeStart.value)))
 
 function beginDrag(handle: 'start' | 'end', event: PointerEvent): void {
   if (props.disabled || safeDuration.value <= 0) {
@@ -62,6 +63,32 @@ function seekFromTrack(event: PointerEvent): void {
   }
 
   emit('seek', secondsFromEvent(event))
+}
+
+function seekFromKeyboard(event: KeyboardEvent): void {
+  if (props.disabled || safeDuration.value <= 0) {
+    return
+  }
+
+  const step = event.shiftKey ? 1 : 0.1
+  let nextValue: number | undefined
+
+  if (event.key === 'ArrowLeft') {
+    nextValue = props.currentTime - step
+  } else if (event.key === 'ArrowRight') {
+    nextValue = props.currentTime + step
+  } else if (event.key === 'Home') {
+    nextValue = 0
+  } else if (event.key === 'End') {
+    nextValue = safeDuration.value
+  }
+
+  if (nextValue === undefined) {
+    return
+  }
+
+  event.preventDefault()
+  emit('seek', roundToMilliseconds(clamp(nextValue, 0, safeDuration.value)))
 }
 
 function updateDraggedHandle(event: PointerEvent): void {
@@ -120,7 +147,9 @@ function clamp(value: number, min: number, max: number): number {
       :aria-valuemin="0"
       :aria-valuemax="safeDuration"
       :aria-valuenow="currentTime"
+      :aria-valuetext="formatTimestamp(currentTime)"
       @pointerdown="seekFromTrack"
+      @keydown="seekFromKeyboard"
     >
       <div
         class="timeline-selection"
@@ -153,6 +182,7 @@ function clamp(value: number, min: number, max: number): number {
 
     <div class="timeline-values">
       <span>Начало: {{ formatTimestamp(safeStart) }}</span>
+      <span>Отрезок: {{ formatTimestamp(selectedDuration) }}</span>
       <span>Позиция: {{ formatTimestamp(currentTime) }}</span>
       <span>Конец: {{ formatTimestamp(safeEnd) }}</span>
     </div>
