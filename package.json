@@ -1,0 +1,53 @@
+{
+  "name": "sigame-uploader",
+  "version": "0.1.0",
+  "description": "Local desktop utility for preparing short media clips for SiGame packages.",
+  "author": "Local user",
+  "main": "out/main/index.js",
+  "productName": "SiGame Media Cutter",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "vue-tsc --noEmit && electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "vue-tsc --noEmit",
+    "check:tools": "node scripts/check-tools.mjs",
+    "debug:metadata": "node scripts/debug-metadata.mjs",
+    "package": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder --win portable"
+  },
+  "dependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "electron-vite": "^3.0.0",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7",
+    "vue-tsc": "^2.2.0"
+  },
+  "build": {
+    "appId": "ru.local.sigame-media-cutter",
+    "productName": "SiGame Media Cutter",
+    "directories": {
+      "output": "release"
+    },
+    "electronDist": "node_modules/electron/dist",
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        "portable"
+      ],
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "publish": null
+  }
+}
