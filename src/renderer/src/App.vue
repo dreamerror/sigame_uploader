@@ -84,6 +84,37 @@ const selectedDurationSeconds = computed(() => {
   return roundToMilliseconds(Math.max(0, endSeconds.value - startSeconds.value))
 })
 const selectedDurationLabel = computed(() => formatTimestamp(selectedDurationSeconds.value))
+const previewState = computed(() => {
+  if (isPreparingPreview.value) {
+    return 'loading'
+  }
+
+  if (previewError.value) {
+    return 'error'
+  }
+
+  if (previewUrl.value) {
+    return 'ready'
+  }
+
+  return 'idle'
+})
+const previewStateLabel = computed(() => {
+  if (previewState.value === 'loading') {
+    return 'Готовится'
+  }
+
+  if (previewState.value === 'error') {
+    return 'Ошибка'
+  }
+
+  if (previewState.value === 'ready') {
+    return 'Готов'
+  }
+
+  return 'Не готов'
+})
+const selectionPlayButtonLabel = computed(() => (isPlayingSelection.value ? 'Остановить' : 'Проиграть отрезок'))
 
 const outputFileName = computed(() => {
   if (!metadata.value) {
@@ -302,6 +333,10 @@ function onPlayerEnded(): void {
   isPlayingSelection.value = false
 }
 
+function onPlayerPause(): void {
+  isPlayingSelection.value = false
+}
+
 function onPlayerError(): void {
   isPlayingSelection.value = false
 
@@ -355,6 +390,20 @@ async function playSelectedSegment(): Promise<void> {
     isPlayingSelection.value = false
     showUnexpectedError(error, 'Не удалось запустить воспроизведение.')
   }
+}
+
+function stopSelectedSegment(): void {
+  isPlayingSelection.value = false
+  playerRef.value?.pause()
+}
+
+async function toggleSelectedSegment(): Promise<void> {
+  if (isPlayingSelection.value) {
+    stopSelectedSegment()
+    return
+  }
+
+  await playSelectedSegment()
 }
 
 function setStartFromCurrent(): void {
@@ -666,7 +715,10 @@ function clamp(value: number, min: number, max: number): number {
 
       <section v-if="metadata" class="panel preview-panel">
         <div class="panel-header">
-          <h2>Preview</h2>
+          <div class="panel-title-row">
+            <h2>Preview</h2>
+            <span class="preview-state" :class="previewState">{{ previewStateLabel }}</span>
+          </div>
           <button type="button" :disabled="isPreparingPreview" @click="() => preparePreview()">
             {{ isPreparingPreview ? 'Готовлю...' : previewUrl ? 'Обновить preview' : 'Подготовить preview' }}
           </button>
@@ -684,6 +736,7 @@ function clamp(value: number, min: number, max: number): number {
           @timeupdate="onPlayerTimeUpdate"
           @loadedmetadata="onPlayerLoadedMetadata"
           @ended="onPlayerEnded"
+          @pause="onPlayerPause"
           @error="onPlayerError"
         ></video>
         <div v-else class="media-player-placeholder" :class="{ loading: isPreparingPreview }">
@@ -707,8 +760,8 @@ function clamp(value: number, min: number, max: number): number {
             <button type="button" :disabled="!canUseSelectionControls" @click="seekToSelectionEnd">К концу</button>
             <button type="button" @click="setStartFromCurrent">Начало из позиции</button>
             <button type="button" @click="setEndFromCurrent">Конец из позиции</button>
-            <button type="button" :disabled="!canUseSelectionControls" @click="playSelectedSegment">
-              Проиграть отрезок
+            <button type="button" :disabled="!canUseSelectionControls" @click="toggleSelectedSegment">
+              {{ selectionPlayButtonLabel }}
             </button>
           </div>
         </div>
@@ -724,40 +777,44 @@ function clamp(value: number, min: number, max: number): number {
           @update:end="setEndSeconds"
           @seek="seekPlayer"
         />
+
+        <div class="clip-controls">
+          <div class="time-grid">
+            <label>
+              <span>Начало</span>
+              <input v-model="startTimestamp" placeholder="01:12.250" autocomplete="off" @blur="normalizeTimestamp('start')" />
+            </label>
+            <label>
+              <span>Конец</span>
+              <input v-model="endTimestamp" placeholder="01:42.750" autocomplete="off" @blur="normalizeTimestamp('end')" />
+            </label>
+          </div>
+
+          <div class="trim-controls">
+            <div class="trim-control-group">
+              <span>Начало</span>
+              <button type="button" @click="nudgeStart(-1)">-1с</button>
+              <button type="button" @click="nudgeStart(-0.1)">-0.1с</button>
+              <button type="button" @click="nudgeStart(0.1)">+0.1с</button>
+              <button type="button" @click="nudgeStart(1)">+1с</button>
+              <button type="button" @click="setStartFromCurrent">Взять из позиции</button>
+            </div>
+            <div class="trim-control-group">
+              <span>Конец</span>
+              <button type="button" @click="nudgeEnd(-1)">-1с</button>
+              <button type="button" @click="nudgeEnd(-0.1)">-0.1с</button>
+              <button type="button" @click="nudgeEnd(0.1)">+0.1с</button>
+              <button type="button" @click="nudgeEnd(1)">+1с</button>
+              <button type="button" @click="setEndFromCurrent">Взять из позиции</button>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section class="panel">
-        <div class="time-grid">
-          <label>
-            <span>Начало</span>
-            <input v-model="startTimestamp" placeholder="01:12.250" autocomplete="off" @blur="normalizeTimestamp('start')" />
-          </label>
-          <label>
-            <span>Конец</span>
-            <input v-model="endTimestamp" placeholder="01:42.750" autocomplete="off" @blur="normalizeTimestamp('end')" />
-          </label>
-        </div>
-
-        <div class="trim-controls">
-          <div class="trim-control-group">
-            <span>Начало</span>
-            <button type="button" @click="nudgeStart(-1)">-1с</button>
-            <button type="button" @click="nudgeStart(-0.1)">-0.1с</button>
-            <button type="button" @click="nudgeStart(0.1)">+0.1с</button>
-            <button type="button" @click="nudgeStart(1)">+1с</button>
-            <button type="button" @click="setStartFromCurrent">Взять из позиции</button>
-          </div>
-          <div class="trim-control-group">
-            <span>Конец</span>
-            <button type="button" @click="nudgeEnd(-1)">-1с</button>
-            <button type="button" @click="nudgeEnd(-0.1)">-0.1с</button>
-            <button type="button" @click="nudgeEnd(0.1)">+0.1с</button>
-            <button type="button" @click="nudgeEnd(1)">+1с</button>
-            <button type="button" @click="setEndFromCurrent">Взять из позиции</button>
-          </div>
-          <button type="button" :disabled="!canUseSelectionControls" @click="playSelectedSegment">
-            Проиграть отрезок
-          </button>
+        <div class="panel-title-row">
+          <h2>Экспорт</h2>
+          <span class="preview-state ready">{{ exportLabel }}</span>
         </div>
 
         <div class="format-toggle" role="radiogroup" aria-label="Формат экспорта">

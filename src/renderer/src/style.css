@@ -155,6 +155,41 @@ h2 {
   gap: 12px;
 }
 
+.panel-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.preview-state {
+  border: 1px solid #d6dde7;
+  border-radius: 999px;
+  padding: 4px 9px;
+  color: #536171;
+  background: #f8fafc;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.preview-state.loading {
+  color: #1e3a8a;
+  background: #dbeafe;
+  border-color: #bfdbfe;
+}
+
+.preview-state.ready {
+  color: #065f46;
+  background: #d1fae5;
+  border-color: #a7f3d0;
+}
+
+.preview-state.error {
+  color: #7f1d1d;
+  background: #fee2e2;
+  border-color: #fecaca;
+}
+
 .preview-panel {
   gap: 16px;
 }
@@ -242,6 +277,13 @@ h2 {
 .inline-error {
   color: #7f1d1d;
   font-size: 0.9rem;
+}
+
+.clip-controls {
+  display: grid;
+  gap: 14px;
+  border-top: 1px solid #e5ebf2;
+  padding-top: 16px;
 }
 
 .progress-panel {
