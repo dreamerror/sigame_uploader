@@ -31,7 +31,7 @@ export class ExportService {
     await this.mediaProbeService.assertAvailable()
 
     if (outputFormat === 'mp4') {
-      const previewMedia = await this.ytDlpService.getPreviewMediaInfo(sourceUrl, request.videoQuality)
+      const previewMedia = await this.ytDlpService.getPreviewMediaInfo(sourceUrl, request.videoQuality, request.auth)
       const probedDuration = await this.mediaProbeService.getDurationSeconds(previewMedia.url, previewMedia.httpHeaders)
 
       validateCutRange(request.startTimestamp, request.endTimestamp, { durationSeconds: probedDuration })
@@ -48,7 +48,7 @@ export class ExportService {
       return { outputPath }
     }
 
-    const streamUrl = await this.ytDlpService.getBestAudioUrl(sourceUrl)
+    const streamUrl = await this.ytDlpService.getBestAudioUrl(sourceUrl, request.auth)
     const probedDuration = await this.mediaProbeService.getDurationSeconds(streamUrl)
 
     validateCutRange(request.startTimestamp, request.endTimestamp, { durationSeconds: probedDuration })

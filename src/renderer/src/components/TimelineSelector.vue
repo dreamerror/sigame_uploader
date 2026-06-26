@@ -13,7 +13,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   'update:start': [value: number]
   'update:end': [value: number]
-  seek: [value: number]
 }>()
 
 const trackRef = ref<HTMLElement | null>(null)
@@ -57,26 +56,20 @@ function endDrag(event: PointerEvent): void {
   draggingHandle.value = null
 }
 
-function seekFromTrack(event: PointerEvent): void {
-  if (props.disabled || safeDuration.value <= 0 || draggingHandle.value) {
-    return
-  }
-
-  emit('seek', secondsFromEvent(event))
-}
-
 function seekFromKeyboard(event: KeyboardEvent): void {
   if (props.disabled || safeDuration.value <= 0) {
     return
   }
 
   const step = event.shiftKey ? 1 : 0.1
+  const editingEnd = event.altKey
+  const currentValue = editingEnd ? safeEnd.value : safeStart.value
   let nextValue: number | undefined
 
   if (event.key === 'ArrowLeft') {
-    nextValue = props.currentTime - step
+    nextValue = currentValue - step
   } else if (event.key === 'ArrowRight') {
-    nextValue = props.currentTime + step
+    nextValue = currentValue + step
   } else if (event.key === 'Home') {
     nextValue = 0
   } else if (event.key === 'End') {
@@ -88,7 +81,13 @@ function seekFromKeyboard(event: KeyboardEvent): void {
   }
 
   event.preventDefault()
-  emit('seek', roundToMilliseconds(clamp(nextValue, 0, safeDuration.value)))
+
+  if (editingEnd) {
+    emit('update:end', roundToMilliseconds(clamp(nextValue, safeStart.value + MIN_FRAGMENT_SECONDS, safeDuration.value)))
+    return
+  }
+
+  emit('update:start', roundToMilliseconds(clamp(nextValue, 0, safeEnd.value - MIN_FRAGMENT_SECONDS)))
 }
 
 function updateDraggedHandle(event: PointerEvent): void {
@@ -146,16 +145,17 @@ function clamp(value: number, min: number, max: number): number {
       tabindex="0"
       :aria-valuemin="0"
       :aria-valuemax="safeDuration"
-      :aria-valuenow="currentTime"
-      :aria-valuetext="formatTimestamp(currentTime)"
-      @pointerdown="seekFromTrack"
+      :aria-valuenow="safeStart"
+      :aria-valuetext="`Начало ${formatTimestamp(safeStart)}, конец ${formatTimestamp(safeEnd)}`"
       @keydown="seekFromKeyboard"
     >
       <div
         class="timeline-selection"
         :style="{ left: `${startPercent}%`, width: `${selectedWidth}%` }"
       ></div>
-      <div class="timeline-current" :style="{ left: `${currentPercent}%` }"></div>
+      <div class="timeline-current" :style="{ left: `${currentPercent}%` }">
+        <span class="timeline-current-line"></span>
+      </div>
       <button
         class="timeline-handle start"
         type="button"

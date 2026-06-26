@@ -1,18 +1,23 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { IPC_CHANNELS } from '../shared/ipc'
 import type {
   ApiResult,
+  CookieCacheRefreshRequest,
+  CookieCacheStatus,
   ExportResult,
   MediaCutRequest,
+  MediaMetadataRequest,
   MediaMetadata,
+  PreviewRequest,
   PreviewResult,
   ThumbnailDownloadRequest,
   ThumbnailDownloadResult,
   ToolStatus
 } from '../shared/types'
 import { AppError } from './services/AppError'
+import { CookieCacheService } from './services/CookieCacheService'
 import { ExportService } from './services/ExportService'
 import { FfmpegService } from './services/FfmpegService'
 import { MediaProbeService } from './services/MediaProbeService'
@@ -23,7 +28,8 @@ import { YtDlpService } from './services/YtDlpService'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-const ytDlpService = new YtDlpService()
+const cookieCacheService = new CookieCacheService(app.getPath('userData'))
+const ytDlpService = new YtDlpService(undefined, cookieCacheService.getCookieFilePath())
 const ffmpegService = new FfmpegService()
 const mediaProbeService = new MediaProbeService()
 const exportService = new ExportService(ytDlpService, ffmpegService, mediaProbeService)
@@ -79,6 +85,12 @@ function toResult<T>(task: () => Promise<T>): Promise<ApiResult<T>> {
     })
 }
 
+async function ensureCookieCacheDirectory(auth?: { cookieCacheEnabled?: boolean }): Promise<void> {
+  if (auth?.cookieCacheEnabled) {
+    await cookieCacheService.ensureDirectory()
+  }
+}
+
 function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.checkTools, () =>
     toResult<ToolStatus>(async () => ({
@@ -88,12 +100,49 @@ function registerIpcHandlers(): void {
     }))
   )
 
-  ipcMain.handle(IPC_CHANNELS.fetchMetadata, (_event, url: string) =>
-    toResult<MediaMetadata>(() => ytDlpService.fetchMetadata(url))
+  ipcMain.handle(IPC_CHANNELS.fetchMetadata, (_event, request: MediaMetadataRequest) =>
+    toResult<MediaMetadata>(async () => {
+      await ensureCookieCacheDirectory(request.auth)
+      return ytDlpService.fetchMetadata(request.url, request.auth)
+    })
   )
 
-  ipcMain.handle(IPC_CHANNELS.preparePreview, (_event, url: string) =>
-    toResult<PreviewResult>(() => previewService.preparePreview(url))
+  ipcMain.handle(IPC_CHANNELS.preparePreview, (_event, request: PreviewRequest) =>
+    toResult<PreviewResult>(async () => {
+      await ensureCookieCacheDirectory(request.auth)
+      return previewService.preparePreview(request.url, request.auth)
+    })
+  )
+
+  ipcMain.handle(IPC_CHANNELS.getCookieCacheStatus, () =>
+    toResult<CookieCacheStatus>(() => cookieCacheService.getStatus())
+  )
+
+  ipcMain.handle(IPC_CHANNELS.refreshCookieCache, (_event, request: CookieCacheRefreshRequest) =>
+    toResult<CookieCacheStatus>(async () => {
+      if (!request.auth?.cookiesFromBrowser) {
+        throw new AppError(
+          'cookie-cache-failure',
+          'Выберите браузер для обновления кэша cookies.',
+          'Кэш обновляется через yt-dlp и --cookies-from-browser, поэтому нужен браузер, где уже выполнен вход в YouTube.'
+        )
+      }
+
+      await cookieCacheService.ensureDirectory()
+      await ytDlpService.fetchMetadata(
+        request.url,
+        {
+          ...request.auth,
+          cookieCacheEnabled: true
+        },
+        'merge'
+      )
+      return cookieCacheService.getStatus()
+    })
+  )
+
+  ipcMain.handle(IPC_CHANNELS.clearCookieCache, () =>
+    toResult<CookieCacheStatus>(() => cookieCacheService.clear())
   )
 
   ipcMain.handle(IPC_CHANNELS.selectOutputFolder, () =>
@@ -112,11 +161,20 @@ function registerIpcHandlers(): void {
   )
 
   ipcMain.handle(IPC_CHANNELS.exportClip, (_event, request: MediaCutRequest) =>
-    toResult<ExportResult>(() => exportService.exportClip(request))
+    toResult<ExportResult>(async () => {
+      await ensureCookieCacheDirectory(request.auth)
+      return exportService.exportClip(request)
+    })
   )
 
   ipcMain.handle(IPC_CHANNELS.downloadThumbnail, (_event, request: ThumbnailDownloadRequest) =>
     toResult<ThumbnailDownloadResult>(() => thumbnailService.downloadThumbnail(request))
+  )
+
+  ipcMain.handle(IPC_CHANNELS.openYouTubeSignIn, () =>
+    toResult<void>(async () => {
+      await shell.openExternal('https://accounts.google.com/ServiceLogin?service=youtube')
+    })
   )
 }
 

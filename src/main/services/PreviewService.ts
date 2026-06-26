@@ -1,4 +1,4 @@
-import type { PreviewResult } from '../../shared/types'
+import type { PreviewResult, YtDlpAuthSettings } from '../../shared/types'
 import { PreviewProxyService } from './PreviewProxyService'
 import { YtDlpService } from './YtDlpService'
 
@@ -8,9 +8,9 @@ export class PreviewService {
     private readonly previewProxyService: PreviewProxyService
   ) {}
 
-  async preparePreview(url: string): Promise<PreviewResult> {
+  async preparePreview(url: string, auth: YtDlpAuthSettings = {}): Promise<PreviewResult> {
     const sourceUrl = this.ytDlpService.validateYouTubeUrl(url)
-    const previewMedia = await this.ytDlpService.getPreviewMediaInfo(sourceUrl)
+    const previewMedia = await this.ytDlpService.getPreviewMediaInfo(sourceUrl, undefined, auth)
     const previewUrl = await this.previewProxyService.registerTarget({
       mediaUrl: previewMedia.url,
       httpHeaders: previewMedia.httpHeaders

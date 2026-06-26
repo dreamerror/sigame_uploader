@@ -1,7 +1,16 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { MIN_FRAGMENT_SECONDS, formatTimestamp, parseTimestampToSeconds, roundToMilliseconds } from '../../shared/time'
-import type { AppErrorPayload, MediaMetadata, ToolStatus, VideoQuality } from '../../shared/types'
+import type {
+  AppErrorPayload,
+  CookieBrowser,
+  CookieCacheStatus,
+  MediaMetadata,
+  ToolStatus,
+  VideoQuality,
+  YtDlpAuthSettings
+} from '../../shared/types'
+import SeekTimeline from './components/SeekTimeline.vue'
 import TimelineSelector from './components/TimelineSelector.vue'
 
 type ExportFormat = 'mp3' | 'mp4'
@@ -12,6 +21,19 @@ const videoQualityOptions: Array<{ value: VideoQuality; label: string }> = [
   { value: '1080p', label: '1080p' },
   { value: 'best', label: 'Лучшее' }
 ]
+const cookieBrowserOptions: Array<{ value: CookieBrowser; label: string }> = [
+  { value: 'chrome', label: 'Google Chrome' },
+  { value: 'edge', label: 'Microsoft Edge' },
+  { value: 'firefox', label: 'Firefox' },
+  { value: 'brave', label: 'Brave' },
+  { value: 'yandex', label: 'Яндекс.Браузер' },
+  { value: 'vivaldi', label: 'Vivaldi' },
+  { value: 'opera', label: 'Opera' },
+  { value: 'chromium', label: 'Chromium' }
+]
+const AUTH_ENABLED_STORAGE_KEY = 'sigame.auth.cookies.enabled'
+const AUTH_BROWSER_STORAGE_KEY = 'sigame.auth.cookies.browser'
+const COOKIE_CACHE_ENABLED_STORAGE_KEY = 'sigame.auth.cookies.cache.enabled'
 
 const url = ref('')
 const startTimestamp = ref('')
@@ -19,12 +41,18 @@ const endTimestamp = ref('')
 const outputDirectory = ref('')
 const exportFormat = ref<ExportFormat>('mp3')
 const videoQuality = ref<VideoQuality>('720p')
+const useBrowserCookies = ref(false)
+const useCookieCache = ref(false)
+const cookieBrowser = ref<CookieBrowser>('chrome')
+const cookieCacheStatus = ref<CookieCacheStatus | null>(null)
 const metadata = ref<MediaMetadata | null>(null)
 const tools = ref<ToolStatus | null>(null)
 const isLoadingMetadata = ref(false)
 const isPreparingPreview = ref(false)
 const isExporting = ref(false)
 const isDownloadingThumbnail = ref(false)
+const isRefreshingCookieCache = ref(false)
+const isClearingCookieCache = ref(false)
 const statusKind = ref<'idle' | 'success' | 'error'>('idle')
 const statusMessage = ref('')
 const errorDetails = ref('')
@@ -35,6 +63,7 @@ const previewUrl = ref('')
 const previewRenderKey = ref(0)
 const playerRef = ref<HTMLVideoElement | null>(null)
 const currentTime = ref(0)
+const isPlayerPlaying = ref(false)
 const isPlayingSelection = ref(false)
 const previewError = ref('')
 let progressTimer: number | undefined
@@ -71,7 +100,28 @@ const canDownloadThumbnail = computed(
 )
 
 const canUseSelectionControls = computed(() => durationSeconds.value > 0 && startSeconds.value !== undefined && endSeconds.value !== undefined)
-const isBusy = computed(() => isLoadingMetadata.value || isPreparingPreview.value || isExporting.value || isDownloadingThumbnail.value)
+const isBusy = computed(
+  () =>
+    isLoadingMetadata.value ||
+    isPreparingPreview.value ||
+    isExporting.value ||
+    isDownloadingThumbnail.value ||
+    isRefreshingCookieCache.value ||
+    isClearingCookieCache.value
+)
+const cookieCacheLabel = computed(() => {
+  if (!cookieCacheStatus.value) {
+    return 'Статус кэша неизвестен'
+  }
+
+  if (!cookieCacheStatus.value.exists) {
+    return 'Кэш cookies пуст'
+  }
+
+  const updatedAt = cookieCacheStatus.value.updatedAt ? new Date(cookieCacheStatus.value.updatedAt).toLocaleString('ru-RU') : ''
+  return updatedAt ? `Кэш обновлён: ${updatedAt}` : 'Кэш cookies сохранён'
+})
+const canRefreshCookieCache = computed(() => useBrowserCookies.value && Boolean(url.value.trim()) && !isRefreshingCookieCache.value)
 const selectedQualityLabel = computed(
   () => videoQualityOptions.find((option) => option.value === videoQuality.value)?.label ?? videoQuality.value
 )
@@ -114,7 +164,10 @@ const previewStateLabel = computed(() => {
 
   return 'Не готов'
 })
-const selectionPlayButtonLabel = computed(() => (isPlayingSelection.value ? 'Остановить' : 'Проиграть отрезок'))
+const selectionPlayButtonLabel = computed(() => (isPlayingSelection.value ? '■ Отрезок' : '▶ Отрезок'))
+const selectionPlayButtonTitle = computed(() => (isPlayingSelection.value ? 'Остановить отрезок' : 'Проиграть выбранный отрезок'))
+const playbackButtonLabel = computed(() => (isPlayerPlaying.value ? '⏸' : '▶'))
+const playbackButtonTitle = computed(() => (isPlayerPlaying.value ? 'Пауза' : 'Воспроизвести'))
 
 const outputFileName = computed(() => {
   if (!metadata.value) {
@@ -163,6 +216,7 @@ const toolWarning = computed(() => {
 })
 
 onMounted(async () => {
+  restoreAuthSettings()
   const api = getApi()
 
   if (!api) {
@@ -176,6 +230,8 @@ onMounted(async () => {
   } else {
     showError(result.error)
   }
+
+  await refreshCookieCacheStatus()
 })
 
 onBeforeUnmount(() => {
@@ -203,7 +259,10 @@ async function fetchMetadata(): Promise<void> {
   let shouldPreparePreview = false
 
   try {
-    const result = await api.fetchMetadata(url.value)
+    const result = await api.fetchMetadata({
+      url: url.value,
+      auth: authSettings()
+    })
 
     if (!result.ok) {
       showError(result.error)
@@ -248,6 +307,7 @@ async function preparePreview(options: { auto?: boolean; retry?: boolean } = {})
   previewError.value = ''
   isPreparingPreview.value = true
   currentTime.value = 0
+  isPlayerPlaying.value = false
   isPlayingSelection.value = false
   lastPreviewWasAutomatic = Boolean(options.auto)
   startProgress(
@@ -259,7 +319,10 @@ async function preparePreview(options: { auto?: boolean; retry?: boolean } = {})
   )
 
   try {
-    const result = await api.preparePreview(metadata.value.sourceUrl)
+    const result = await api.preparePreview({
+      url: metadata.value.sourceUrl,
+      auth: authSettings()
+    })
 
     if (!result.ok) {
       showError(result.error)
@@ -330,14 +393,21 @@ function onPlayerLoadedMetadata(): void {
 }
 
 function onPlayerEnded(): void {
+  isPlayerPlaying.value = false
   isPlayingSelection.value = false
 }
 
+function onPlayerPlay(): void {
+  isPlayerPlaying.value = true
+}
+
 function onPlayerPause(): void {
+  isPlayerPlaying.value = false
   isPlayingSelection.value = false
 }
 
 function onPlayerError(): void {
+  isPlayerPlaying.value = false
   isPlayingSelection.value = false
 
   if (lastPreviewWasAutomatic && !autoPreviewRetryUsed && metadata.value && !isPreparingPreview.value) {
@@ -361,6 +431,33 @@ function seekPlayer(value: number): void {
 
   if (playerRef.value) {
     playerRef.value.currentTime = rounded
+  }
+}
+
+async function togglePlayback(): Promise<void> {
+  if (!previewUrl.value && !(await preparePreview())) {
+    return
+  }
+
+  await nextTick()
+
+  if (!playerRef.value) {
+    showUnexpectedError('Плеер недоступен.', 'Не удалось управлять воспроизведением.')
+    return
+  }
+
+  if (isPlayerPlaying.value) {
+    playerRef.value.pause()
+    return
+  }
+
+  isPlayingSelection.value = false
+
+  try {
+    await playerRef.value.play()
+  } catch (error) {
+    isPlayerPlaying.value = false
+    showUnexpectedError(error, 'Не удалось запустить воспроизведение.')
   }
 }
 
@@ -393,6 +490,7 @@ async function playSelectedSegment(): Promise<void> {
 }
 
 function stopSelectedSegment(): void {
+  isPlayerPlaying.value = false
   isPlayingSelection.value = false
   playerRef.value?.pause()
 }
@@ -520,6 +618,7 @@ async function exportClip(): Promise<void> {
       outputFileName: outputFileBaseName.value,
       outputFormat: exportFormat.value,
       videoQuality: videoQuality.value,
+      auth: authSettings(),
       sourceDurationSeconds: metadata.value.durationSeconds > 0 ? metadata.value.durationSeconds : undefined
     })
 
@@ -605,6 +704,143 @@ function clearStatus(): void {
   statusKind.value = 'idle'
   statusMessage.value = ''
   errorDetails.value = ''
+}
+
+async function openYouTubeSignIn(): Promise<void> {
+  const api = getApi()
+
+  if (!api) {
+    return
+  }
+
+  const result = await api.openYouTubeSignIn()
+
+  if (!result.ok) {
+    showError(result.error)
+  }
+}
+
+async function refreshCookieCacheStatus(): Promise<void> {
+  const api = getApi()
+
+  if (!api) {
+    return
+  }
+
+  const result = await api.getCookieCacheStatus()
+
+  if (result.ok) {
+    cookieCacheStatus.value = result.data
+  }
+}
+
+async function refreshCookieCache(): Promise<void> {
+  const api = getApi()
+
+  if (!api) {
+    return
+  }
+
+  if (!url.value.trim()) {
+    statusKind.value = 'error'
+    statusMessage.value = 'Вставьте ссылку YouTube перед обновлением кэша cookies.'
+    errorDetails.value = 'yt-dlp обновляет кэш на реальном запросе к YouTube, поэтому нужна текущая ссылка.'
+    return
+  }
+
+  if (!useBrowserCookies.value) {
+    statusKind.value = 'error'
+    statusMessage.value = 'Включите cookies из браузера перед обновлением кэша.'
+    errorDetails.value = 'Кэш создаётся из браузера, где уже выполнен вход в YouTube.'
+    return
+  }
+
+  clearStatus()
+  isRefreshingCookieCache.value = true
+  startProgress('Обновляю локальный кэш cookies через yt-dlp. Если браузер открыт, он может блокировать файл cookies.')
+
+  try {
+    const result = await api.refreshCookieCache({
+      url: url.value,
+      auth: {
+        cookiesFromBrowser: cookieBrowser.value,
+        cookieCacheEnabled: true
+      }
+    })
+
+    if (!result.ok) {
+      showError(result.error)
+      return
+    }
+
+    cookieCacheStatus.value = result.data
+    useCookieCache.value = true
+    saveAuthSettings()
+    statusKind.value = 'success'
+    statusMessage.value = 'Кэш cookies обновлён. Теперь можно использовать его без повторного чтения браузера.'
+  } catch (error) {
+    showUnexpectedError(error, 'Не удалось обновить кэш cookies.')
+  } finally {
+    isRefreshingCookieCache.value = false
+    stopProgress()
+  }
+}
+
+async function clearCookieCache(): Promise<void> {
+  const api = getApi()
+
+  if (!api) {
+    return
+  }
+
+  clearStatus()
+  isClearingCookieCache.value = true
+
+  try {
+    const result = await api.clearCookieCache()
+
+    if (!result.ok) {
+      showError(result.error)
+      return
+    }
+
+    cookieCacheStatus.value = result.data
+    useCookieCache.value = false
+    saveAuthSettings()
+    statusKind.value = 'success'
+    statusMessage.value = 'Кэш cookies очищен.'
+  } catch (error) {
+    showUnexpectedError(error, 'Не удалось очистить кэш cookies.')
+  } finally {
+    isClearingCookieCache.value = false
+  }
+}
+
+function authSettings(): YtDlpAuthSettings {
+  return {
+    ...(useBrowserCookies.value ? { cookiesFromBrowser: cookieBrowser.value } : {}),
+    ...(useCookieCache.value ? { cookieCacheEnabled: true } : {})
+  }
+}
+
+function saveAuthSettings(): void {
+  window.localStorage.setItem(AUTH_ENABLED_STORAGE_KEY, String(useBrowserCookies.value))
+  window.localStorage.setItem(AUTH_BROWSER_STORAGE_KEY, cookieBrowser.value)
+  window.localStorage.setItem(COOKIE_CACHE_ENABLED_STORAGE_KEY, String(useCookieCache.value))
+}
+
+function restoreAuthSettings(): void {
+  useBrowserCookies.value = window.localStorage.getItem(AUTH_ENABLED_STORAGE_KEY) === 'true'
+  useCookieCache.value = window.localStorage.getItem(COOKIE_CACHE_ENABLED_STORAGE_KEY) === 'true'
+  const browser = window.localStorage.getItem(AUTH_BROWSER_STORAGE_KEY)
+
+  if (isCookieBrowser(browser)) {
+    cookieBrowser.value = browser
+  }
+}
+
+function isCookieBrowser(value: string | null): value is CookieBrowser {
+  return cookieBrowserOptions.some((option) => option.value === value)
 }
 
 function startProgress(message: string): void {
@@ -695,6 +931,64 @@ function clamp(value: number, min: number, max: number): number {
         </div>
       </form>
 
+      <section class="panel auth-panel">
+        <div class="panel-title-row">
+          <h2>Доступ YouTube</h2>
+          <span class="preview-state" :class="useBrowserCookies || useCookieCache ? 'ready' : 'idle'">
+            {{ useBrowserCookies || useCookieCache ? 'Cookies включены' : 'Без cookies' }}
+          </span>
+        </div>
+
+        <label class="checkbox-row">
+          <input v-model="useBrowserCookies" type="checkbox" @change="saveAuthSettings" />
+          <span>Использовать cookies из браузера для yt-dlp</span>
+        </label>
+
+        <label class="checkbox-row">
+          <input v-model="useCookieCache" type="checkbox" @change="saveAuthSettings" />
+          <span>Использовать локальный кэш cookies</span>
+        </label>
+
+        <div class="auth-controls">
+          <label>
+            <span>Браузер, где выполнен вход в YouTube</span>
+            <select v-model="cookieBrowser" :disabled="!useBrowserCookies" @change="saveAuthSettings">
+              <option v-for="option in cookieBrowserOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+          <button type="button" @click="openYouTubeSignIn">Открыть вход YouTube</button>
+        </div>
+
+        <div class="auth-controls cookie-cache-controls">
+          <div class="cache-status">
+            <span>Кэш cookies</span>
+            <strong>{{ cookieCacheLabel }}</strong>
+          </div>
+          <button type="button" :disabled="!canRefreshCookieCache" @click="refreshCookieCache">
+            {{ isRefreshingCookieCache ? 'Обновляю...' : 'Обновить кэш cookies' }}
+          </button>
+          <button type="button" :disabled="isClearingCookieCache || !cookieCacheStatus?.exists" @click="clearCookieCache">
+            {{ isClearingCookieCache ? 'Очищаю...' : 'Очистить кэш' }}
+          </button>
+        </div>
+
+        <p class="path-hint">
+          Без кэша приложение не сохраняет cookies: вы выбираете браузер, а `yt-dlp` локально читает вашу сессию через
+          `--cookies-from-browser`. Если включить локальный кэш, cookies сохраняются в папке данных приложения и затем
+          используются через `--cookies`.
+        </p>
+        <p v-if="useBrowserCookies" class="path-hint">
+          Перед запросом лучше полностью закрыть выбранный браузер: на Windows открытый Chromium-браузер может блокировать
+          файл cookies для `yt-dlp`.
+        </p>
+        <p v-if="useCookieCache" class="path-hint">
+          Кэш хранит сессионные cookies локально на этом компьютере. Используйте его только на доверенной машине и очищайте
+          кнопкой “Очистить кэш”, если доступ больше не нужен.
+        </p>
+      </section>
+
       <section v-if="isBusy" class="progress-panel" role="status" aria-live="polite">
         <div class="progress-copy">
           <strong>{{ progressMessage }}</strong>
@@ -724,24 +1018,58 @@ function clamp(value: number, min: number, max: number): number {
           </button>
         </div>
 
-        <video
-          v-if="previewUrl"
-          ref="playerRef"
-          :key="previewRenderKey"
-          class="media-player"
-          :src="previewUrl"
-          controls
-          preload="metadata"
-          playsinline
-          @timeupdate="onPlayerTimeUpdate"
-          @loadedmetadata="onPlayerLoadedMetadata"
-          @ended="onPlayerEnded"
-          @pause="onPlayerPause"
-          @error="onPlayerError"
-        ></video>
-        <div v-else class="media-player-placeholder" :class="{ loading: isPreparingPreview }">
-          <strong>{{ isPreparingPreview ? 'Preview готовится' : 'Preview ещё не готов' }}</strong>
-          <span>{{ isPreparingPreview ? 'Плеер появится после подготовки потока.' : 'Можно задать start/end вручную и экспортировать без preview.' }}</span>
+        <div class="player-frame">
+          <video
+            v-if="previewUrl"
+            ref="playerRef"
+            :key="previewRenderKey"
+            class="media-player"
+            :src="previewUrl"
+            preload="metadata"
+            playsinline
+            tabindex="0"
+            @click="togglePlayback"
+            @keydown.space.prevent="togglePlayback"
+            @timeupdate="onPlayerTimeUpdate"
+            @loadedmetadata="onPlayerLoadedMetadata"
+            @play="onPlayerPlay"
+            @ended="onPlayerEnded"
+            @pause="onPlayerPause"
+            @error="onPlayerError"
+          ></video>
+          <div v-else class="media-player-placeholder" :class="{ loading: isPreparingPreview }">
+            <strong>{{ isPreparingPreview ? 'Preview готовится' : 'Preview ещё не готов' }}</strong>
+            <span>{{ isPreparingPreview ? 'Плеер появится после подготовки потока.' : 'Можно задать start/end вручную и экспортировать без preview.' }}</span>
+          </div>
+
+          <div v-if="previewUrl" class="custom-player-controls">
+            <SeekTimeline
+              v-if="durationSeconds > 0"
+              :duration="durationSeconds"
+              :current-time="currentTime"
+              :start="startSeconds ?? 0"
+              :end="endSeconds ?? Math.min(durationSeconds, MIN_FRAGMENT_SECONDS)"
+              :disabled="!canUseSelectionControls"
+              @seek="seekPlayer"
+            />
+
+            <div class="player-transport">
+              <button class="transport-icon-button" type="button" :aria-label="playbackButtonTitle" :title="playbackButtonTitle" @click="togglePlayback">
+                {{ playbackButtonLabel }}
+              </button>
+              <button
+                class="transport-segment-button"
+                type="button"
+                :disabled="!canUseSelectionControls"
+                :aria-label="selectionPlayButtonTitle"
+                :title="selectionPlayButtonTitle"
+                @click="toggleSelectedSegment"
+              >
+                {{ selectionPlayButtonLabel }}
+              </button>
+              <span class="transport-time">{{ formatTimestamp(currentTime) }} / {{ durationLabel }}</span>
+            </div>
+          </div>
         </div>
         <p v-if="previewError" class="inline-error">{{ previewError }}</p>
         <p v-else class="path-hint">
@@ -760,25 +1088,21 @@ function clamp(value: number, min: number, max: number): number {
             <button type="button" :disabled="!canUseSelectionControls" @click="seekToSelectionEnd">К концу</button>
             <button type="button" @click="setStartFromCurrent">Начало из позиции</button>
             <button type="button" @click="setEndFromCurrent">Конец из позиции</button>
-            <button type="button" :disabled="!canUseSelectionControls" @click="toggleSelectedSegment">
-              {{ selectionPlayButtonLabel }}
-            </button>
           </div>
         </div>
 
-        <TimelineSelector
-          v-if="durationSeconds > 0"
-          :duration="durationSeconds"
-          :current-time="currentTime"
-          :start="startSeconds ?? 0"
-          :end="endSeconds ?? Math.min(durationSeconds, MIN_FRAGMENT_SECONDS)"
-          :disabled="!canUseSelectionControls"
-          @update:start="setStartSeconds"
-          @update:end="setEndSeconds"
-          @seek="seekPlayer"
-        />
-
         <div class="clip-controls">
+          <TimelineSelector
+            v-if="durationSeconds > 0"
+            :duration="durationSeconds"
+            :current-time="currentTime"
+            :start="startSeconds ?? 0"
+            :end="endSeconds ?? Math.min(durationSeconds, MIN_FRAGMENT_SECONDS)"
+            :disabled="!canUseSelectionControls"
+            @update:start="setStartSeconds"
+            @update:end="setEndSeconds"
+          />
+
           <div class="time-grid">
             <label>
               <span>Начало</span>

@@ -6,6 +6,22 @@ export interface MediaMetadata {
 }
 
 export type VideoQuality = '360p' | '480p' | '720p' | '1080p' | 'best'
+export type CookieBrowser = 'chrome' | 'edge' | 'firefox' | 'brave' | 'vivaldi' | 'opera' | 'chromium' | 'yandex'
+
+export interface YtDlpAuthSettings {
+  cookiesFromBrowser?: CookieBrowser
+  cookieCacheEnabled?: boolean
+}
+
+export interface MediaMetadataRequest {
+  url: string
+  auth?: YtDlpAuthSettings
+}
+
+export interface PreviewRequest {
+  url: string
+  auth?: YtDlpAuthSettings
+}
 
 export interface MediaCutRequest {
   sourceUrl: string
@@ -16,6 +32,7 @@ export interface MediaCutRequest {
   outputFormat?: 'mp3' | 'mp4'
   videoQuality?: VideoQuality
   sourceDurationSeconds?: number
+  auth?: YtDlpAuthSettings
 }
 
 export interface ExportResult {
@@ -30,6 +47,16 @@ export interface ThumbnailDownloadRequest {
 
 export interface ThumbnailDownloadResult {
   outputPath: string
+}
+
+export interface CookieCacheStatus {
+  exists: boolean
+  updatedAt?: string
+}
+
+export interface CookieCacheRefreshRequest {
+  url: string
+  auth?: YtDlpAuthSettings
 }
 
 export interface PreviewResult {
@@ -53,6 +80,7 @@ export type AppErrorCode =
   | 'thumbnail-failure'
   | 'metadata-failure'
   | 'preview-failure'
+  | 'cookie-cache-failure'
   | 'folder-selection-cancelled'
   | 'unexpected-error'
 
@@ -66,9 +94,13 @@ export type ApiResult<T> = { ok: true; data: T } | { ok: false; error: AppErrorP
 
 export interface SigameApi {
   checkTools(): Promise<ApiResult<ToolStatus>>
-  fetchMetadata(url: string): Promise<ApiResult<MediaMetadata>>
-  preparePreview(url: string): Promise<ApiResult<PreviewResult>>
+  fetchMetadata(request: MediaMetadataRequest): Promise<ApiResult<MediaMetadata>>
+  preparePreview(request: PreviewRequest): Promise<ApiResult<PreviewResult>>
+  getCookieCacheStatus(): Promise<ApiResult<CookieCacheStatus>>
+  refreshCookieCache(request: CookieCacheRefreshRequest): Promise<ApiResult<CookieCacheStatus>>
+  clearCookieCache(): Promise<ApiResult<CookieCacheStatus>>
   selectOutputFolder(): Promise<ApiResult<string>>
   exportClip(request: MediaCutRequest): Promise<ApiResult<ExportResult>>
   downloadThumbnail(request: ThumbnailDownloadRequest): Promise<ApiResult<ThumbnailDownloadResult>>
+  openYouTubeSignIn(): Promise<ApiResult<void>>
 }
