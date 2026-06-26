@@ -1,5 +1,42 @@
 # Журнал разработки
 
+## 2026-06-26: Редизайн Dark Precision Utility
+
+### Что изменено
+
+- Интерфейс `src/renderer/src/App.vue` перестроен под направление `Dark Precision Utility`.
+- Вместо светлой dashboard-компоновки добавлены:
+  - верхняя command bar для YouTube URL, загрузки metadata и статуса инструментов;
+  - центральная media-workspace зона с preview-плеером и timeline;
+  - правая панель metadata, output folder, формата/качества экспорта и cookies-настроек;
+  - нижняя status bar для текущих операций, ошибок, таймера и путей экспорта.
+- `src/renderer/src/style.css` переписан на тёмную CSS-систему с переменными цветов, плотными controls, компактными панелями и рабочим timeline-оформлением.
+- Плеер и timeline визуально стали главным центром приложения.
+- Большие декоративные карточки, крупный header и светлая SaaS/dashboard-эстетика убраны.
+
+### Что сохранено
+
+- Текущий MVP-flow сохранён: YouTube URL, metadata, preview, ручной start/end, timeline без waveform, output folder, MP3/MP4 export, thumbnail download, cookies-настройки, русские ошибки и статусы.
+- Архитектура не менялась: renderer продолжает работать только через preload API, внешние инструменты остаются в main-process services.
+- Новые источники контента, waveform, локальная нарезка файлов и UI-библиотеки не добавлялись.
+
+### Как тестировать
+
+```powershell
+npm run check:tools
+npm run typecheck
+npm run build
+npm run package
+```
+
+Для живой проверки:
+
+1. Запустить `npm run dev`.
+2. Вставить YouTube-ссылку на медиа, которое пользователь имеет право использовать.
+3. Нажать “Получить данные”.
+4. Проверить, что metadata загрузились, preview/timeline доступны или export-flow остаётся рабочим без preview.
+5. Выбрать start/end, output folder, формат MP3/MP4 и выполнить экспорт.
+
 ## 2026-06-24: Начальный MVP
 
 ### Что реализовано
@@ -1019,3 +1056,41 @@ npm run package
 - Если browser cookies зависают на долгом запросе, fallback сработает только после завершения или таймаута первой попытки `yt-dlp`.
 - Если локальный кэш устарел или пустой, fallback тоже может завершиться ошибкой.
 - Автоматического live-теста YouTube flow по-прежнему нет.
+
+## 2026-06-26: Overlay controls для preview-плеера
+
+### Что изменено
+
+- Transport controls перенесены из нижней панели плеера в overlay поверх видео.
+- Overlay закреплён в нижней части `.player-frame` через абсолютное позиционирование.
+- SeekTimeline внутри плеера остался шкалой перемотки, а основной `TimelineSelector` ниже плеера остаётся главным инструментом выбора start/end.
+- Кнопки play/pause и “Отрезок” оставлены компактными и оформлены в тёмном стиле текущего UI.
+- Добавлен короткий play/pause feedback при клике по видео или кнопке transport:
+  - `play`;
+  - `pause`;
+  - CSS fade/scale без сложных эффектов.
+- Overlay-кнопки используют остановку всплытия клика, чтобы не дублировать togglePlayback через видео.
+- Git-команды, меняющие состояние репозитория, не запускались.
+
+### Как тестировать
+
+```powershell
+npm run typecheck
+npm run build
+npm run package
+```
+
+Ручная проверка:
+
+1. Получить metadata и дождаться preview.
+2. Проверить, что transport controls находятся поверх видео в нижней части.
+3. Кликнуть по видео и убедиться, что play/pause работает и появляется короткий feedback.
+4. Нажать space на сфокусированном видео и убедиться, что playback toggle не сломан.
+5. Проверить seek-шкалу в overlay и основной `TimelineSelector` ниже плеера.
+6. Проверить “Отрезок”, preview и export-flow на коротком разрешённом фрагменте.
+
+### Оставшиеся ограничения
+
+- Overlay пока не содержит volume/fullscreen controls.
+- Точную визуальную полировку overlay стоит продолжить после проверки в реальном окне приложения.
+- Waveform не добавлялся.

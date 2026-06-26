@@ -66,8 +66,11 @@ const currentTime = ref(0)
 const isPlayerPlaying = ref(false)
 const isPlayingSelection = ref(false)
 const previewError = ref('')
+const playbackFeedback = ref<'play' | 'pause' | ''>('')
+const playbackFeedbackKey = ref(0)
 let progressTimer: number | undefined
 let autoPreviewRetryTimer: number | undefined
+let playbackFeedbackTimer: number | undefined
 let lastPreviewWasAutomatic = false
 let autoPreviewRetryUsed = false
 
@@ -237,6 +240,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   stopProgress()
   clearAutoPreviewRetry()
+  clearPlaybackFeedback()
 })
 
 async function fetchMetadata(): Promise<void> {
@@ -448,6 +452,7 @@ async function togglePlayback(): Promise<void> {
 
   if (isPlayerPlaying.value) {
     playerRef.value.pause()
+    showPlaybackFeedback('pause')
     return
   }
 
@@ -455,6 +460,7 @@ async function togglePlayback(): Promise<void> {
 
   try {
     await playerRef.value.play()
+    showPlaybackFeedback('play')
   } catch (error) {
     isPlayerPlaying.value = false
     showUnexpectedError(error, 'Не удалось запустить воспроизведение.')
@@ -869,6 +875,23 @@ function clearAutoPreviewRetry(): void {
   }
 }
 
+function showPlaybackFeedback(kind: 'play' | 'pause'): void {
+  clearPlaybackFeedback()
+  playbackFeedback.value = kind
+  playbackFeedbackKey.value += 1
+  playbackFeedbackTimer = window.setTimeout(() => {
+    playbackFeedback.value = ''
+    playbackFeedbackTimer = undefined
+  }, 520)
+}
+
+function clearPlaybackFeedback(): void {
+  if (playbackFeedbackTimer !== undefined) {
+    window.clearTimeout(playbackFeedbackTimer)
+    playbackFeedbackTimer = undefined
+  }
+}
+
 function sanitizeOutputBaseName(value: string): string {
   const fallback = `sigame_clip_${new Date().toISOString().replace(/[:.]/g, '-')}`
   const candidate = value
@@ -903,20 +926,15 @@ function clamp(value: number, min: number, max: number): number {
 
 <template>
   <main class="app-shell">
-    <section class="workspace">
-      <header class="app-header">
-        <div>
-          <p class="eyebrow">Локальная настольная утилита</p>
-          <h1>SiGame Media Cutter</h1>
+    <section class="app-frame">
+      <header class="command-bar">
+        <div class="brand-block">
+          <strong>SiGame Media Cutter</strong>
+          <span>Dark Precision Utility</span>
         </div>
-        <div class="tool-status" :class="{ warning: toolWarning }">
-          {{ toolWarning || 'Инструменты найдены' }}
-        </div>
-      </header>
 
-      <form class="panel" @submit.prevent="fetchMetadata">
-        <label for="url">Ссылка YouTube</label>
-        <div class="input-row">
+        <form class="source-form" @submit.prevent="fetchMetadata">
+          <label class="sr-only" for="url">Ссылка YouTube</label>
           <input
             id="url"
             v-model="url"
@@ -925,266 +943,332 @@ function clamp(value: number, min: number, max: number): number {
             autocomplete="off"
             required
           />
-          <button type="submit" :disabled="isLoadingMetadata">
-            {{ isLoadingMetadata ? 'Загрузка...' : 'Получить' }}
+          <button class="primary-button" type="submit" :disabled="isLoadingMetadata">
+            {{ isLoadingMetadata ? 'Получаю...' : 'Получить данные' }}
           </button>
-        </div>
-      </form>
+        </form>
 
-      <section class="panel auth-panel">
-        <div class="panel-title-row">
-          <h2>Доступ YouTube</h2>
-          <span class="preview-state" :class="useBrowserCookies || useCookieCache ? 'ready' : 'idle'">
-            {{ useBrowserCookies || useCookieCache ? 'Cookies включены' : 'Без cookies' }}
+        <div class="command-status">
+          <span v-if="isBusy" class="operation-pill">
+            {{ progressMessage }}
+            <strong>{{ elapsedSeconds }} сек.</strong>
+          </span>
+          <span v-else class="tool-status" :class="{ warning: toolWarning }">
+            {{ toolWarning || 'Инструменты найдены' }}
           </span>
         </div>
+      </header>
 
-        <label class="checkbox-row">
-          <input v-model="useBrowserCookies" type="checkbox" @change="saveAuthSettings" />
-          <span>Использовать cookies из браузера для yt-dlp</span>
-        </label>
+      <section class="workbench">
+        <section class="media-workspace">
+          <section class="workspace-panel player-panel">
+            <div class="panel-header">
+              <div class="panel-title-row">
+                <span class="section-kicker">Media workspace</span>
+                <h1>Preview и точный отрезок</h1>
+              </div>
+              <div class="header-actions">
+                <span class="preview-state" :class="previewState">{{ previewStateLabel }}</span>
+                <button type="button" :disabled="!metadata || isPreparingPreview" @click="() => preparePreview()">
+                  {{ isPreparingPreview ? 'Готовлю...' : previewUrl ? 'Обновить preview' : 'Подготовить preview' }}
+                </button>
+              </div>
+            </div>
 
-        <label class="checkbox-row">
-          <input v-model="useCookieCache" type="checkbox" @change="saveAuthSettings" />
-          <span>Использовать локальный кэш cookies</span>
-        </label>
+            <div class="player-frame">
+              <template v-if="previewUrl">
+                <video
+                  ref="playerRef"
+                  :key="previewRenderKey"
+                  class="media-player"
+                  :src="previewUrl"
+                  preload="metadata"
+                  playsinline
+                  tabindex="0"
+                  @click="togglePlayback"
+                  @keydown.space.prevent="togglePlayback"
+                  @timeupdate="onPlayerTimeUpdate"
+                  @loadedmetadata="onPlayerLoadedMetadata"
+                  @play="onPlayerPlay"
+                  @ended="onPlayerEnded"
+                  @pause="onPlayerPause"
+                  @error="onPlayerError"
+                ></video>
+                <div v-if="playbackFeedback" :key="playbackFeedbackKey" class="playback-feedback" aria-hidden="true">
+                  {{ playbackFeedback === 'play' ? '▶' : '⏸' }}
+                </div>
 
-        <div class="auth-controls">
-          <label>
-            <span>Браузер, где выполнен вход в YouTube</span>
-            <select v-model="cookieBrowser" :disabled="!useBrowserCookies" @change="saveAuthSettings">
-              <option v-for="option in cookieBrowserOptions" :key="option.value" :value="option.value">
-                {{ option.label }}
-              </option>
-            </select>
-          </label>
-          <button type="button" @click="openYouTubeSignIn">Открыть вход YouTube</button>
-        </div>
+                <div class="player-overlay">
+                  <SeekTimeline
+                    v-if="durationSeconds > 0"
+                    :duration="durationSeconds"
+                    :current-time="currentTime"
+                    :start="startSeconds ?? 0"
+                    :end="endSeconds ?? Math.min(durationSeconds, MIN_FRAGMENT_SECONDS)"
+                    :disabled="!canUseSelectionControls"
+                    @seek="seekPlayer"
+                  />
 
-        <div class="auth-controls cookie-cache-controls">
-          <div class="cache-status">
-            <span>Кэш cookies</span>
-            <strong>{{ cookieCacheLabel }}</strong>
-          </div>
-          <button type="button" :disabled="!canRefreshCookieCache" @click="refreshCookieCache">
-            {{ isRefreshingCookieCache ? 'Обновляю...' : 'Обновить кэш cookies' }}
-          </button>
-          <button type="button" :disabled="isClearingCookieCache || !cookieCacheStatus?.exists" @click="clearCookieCache">
-            {{ isClearingCookieCache ? 'Очищаю...' : 'Очистить кэш' }}
-          </button>
-        </div>
+                  <div class="player-transport">
+                    <button
+                      class="transport-icon-button"
+                      type="button"
+                      :aria-label="playbackButtonTitle"
+                      :title="playbackButtonTitle"
+                      @click.stop="togglePlayback"
+                    >
+                      {{ playbackButtonLabel }}
+                    </button>
+                    <button
+                      class="transport-segment-button"
+                      type="button"
+                      :disabled="!canUseSelectionControls"
+                      :aria-label="selectionPlayButtonTitle"
+                      :title="selectionPlayButtonTitle"
+                      @click.stop="toggleSelectedSegment"
+                    >
+                      {{ selectionPlayButtonLabel }}
+                    </button>
+                    <span class="transport-time">{{ formatTimestamp(currentTime) }} / {{ durationLabel }}</span>
+                  </div>
+                </div>
+              </template>
+              <div v-else class="media-player-placeholder" :class="{ loading: isPreparingPreview }">
+                <strong>
+                  {{ metadata ? (isPreparingPreview ? 'Preview готовится' : 'Preview ещё не готов') : 'Вставьте ссылку и получите данные' }}
+                </strong>
+                <span>
+                  {{
+                    metadata
+                      ? isPreparingPreview
+                        ? 'Плеер появится после подготовки локального proxy-потока.'
+                        : 'Можно задать start/end вручную и экспортировать без preview.'
+                      : 'После metadata здесь появится плеер, timeline и точная настройка фрагмента.'
+                  }}
+                </span>
+              </div>
+            </div>
 
-        <p class="path-hint">
-          Без кэша приложение не сохраняет cookies: вы выбираете браузер, а `yt-dlp` локально читает вашу сессию через
-          `--cookies-from-browser`. Если включить локальный кэш, cookies сохраняются в папке данных приложения и затем
-          используются через `--cookies`.
-        </p>
-        <p v-if="useBrowserCookies" class="path-hint">
-          Перед запросом лучше полностью закрыть выбранный браузер: на Windows открытый Chromium-браузер может блокировать
-          файл cookies для `yt-dlp`.
-        </p>
-        <p v-if="useCookieCache" class="path-hint">
-          Кэш хранит сессионные cookies локально на этом компьютере. Используйте его только на доверенной машине и очищайте
-          кнопкой “Очистить кэш”, если доступ больше не нужен.
-        </p>
-      </section>
+            <p v-if="previewError" class="inline-error">{{ previewError }}</p>
+            <p v-else class="path-hint">
+              Preview идёт через локальный streaming proxy без временных файлов. Export-flow остаётся доступен отдельно.
+            </p>
+          </section>
 
-      <section v-if="isBusy" class="progress-panel" role="status" aria-live="polite">
-        <div class="progress-copy">
-          <strong>{{ progressMessage }}</strong>
-          <span>{{ elapsedSeconds }} сек.</span>
-        </div>
-        <div class="progress-track" aria-hidden="true">
-          <div class="progress-bar"></div>
-        </div>
-      </section>
+          <section class="workspace-panel timeline-panel">
+            <div class="panel-header compact">
+              <div class="panel-title-row">
+                <span class="section-kicker">Timeline</span>
+                <h2>Границы фрагмента</h2>
+              </div>
+              <div class="selection-stats">
+                <span>Позиция {{ formatTimestamp(currentTime) }}</span>
+                <span>Отрезок {{ selectedDurationLabel }}</span>
+              </div>
+            </div>
 
-      <section v-if="metadata" class="media-preview">
-        <img v-if="metadata.thumbnailUrl" :src="metadata.thumbnailUrl" alt="" />
-        <div class="media-copy">
-          <h2>{{ metadata.title }}</h2>
-          <p>{{ durationLabel }}</p>
-        </div>
-      </section>
-
-      <section v-if="metadata" class="panel preview-panel">
-        <div class="panel-header">
-          <div class="panel-title-row">
-            <h2>Preview</h2>
-            <span class="preview-state" :class="previewState">{{ previewStateLabel }}</span>
-          </div>
-          <button type="button" :disabled="isPreparingPreview" @click="() => preparePreview()">
-            {{ isPreparingPreview ? 'Готовлю...' : previewUrl ? 'Обновить preview' : 'Подготовить preview' }}
-          </button>
-        </div>
-
-        <div class="player-frame">
-          <video
-            v-if="previewUrl"
-            ref="playerRef"
-            :key="previewRenderKey"
-            class="media-player"
-            :src="previewUrl"
-            preload="metadata"
-            playsinline
-            tabindex="0"
-            @click="togglePlayback"
-            @keydown.space.prevent="togglePlayback"
-            @timeupdate="onPlayerTimeUpdate"
-            @loadedmetadata="onPlayerLoadedMetadata"
-            @play="onPlayerPlay"
-            @ended="onPlayerEnded"
-            @pause="onPlayerPause"
-            @error="onPlayerError"
-          ></video>
-          <div v-else class="media-player-placeholder" :class="{ loading: isPreparingPreview }">
-            <strong>{{ isPreparingPreview ? 'Preview готовится' : 'Preview ещё не готов' }}</strong>
-            <span>{{ isPreparingPreview ? 'Плеер появится после подготовки потока.' : 'Можно задать start/end вручную и экспортировать без preview.' }}</span>
-          </div>
-
-          <div v-if="previewUrl" class="custom-player-controls">
-            <SeekTimeline
-              v-if="durationSeconds > 0"
+            <TimelineSelector
+              v-if="metadata && durationSeconds > 0"
               :duration="durationSeconds"
               :current-time="currentTime"
               :start="startSeconds ?? 0"
               :end="endSeconds ?? Math.min(durationSeconds, MIN_FRAGMENT_SECONDS)"
               :disabled="!canUseSelectionControls"
-              @seek="seekPlayer"
+              @update:start="setStartSeconds"
+              @update:end="setEndSeconds"
             />
+            <div v-else class="timeline-empty">
+              Timeline появится после загрузки metadata.
+            </div>
 
-            <div class="player-transport">
-              <button class="transport-icon-button" type="button" :aria-label="playbackButtonTitle" :title="playbackButtonTitle" @click="togglePlayback">
-                {{ playbackButtonLabel }}
+            <div class="clip-controls">
+              <div class="time-grid">
+                <label>
+                  <span>Начало</span>
+                  <input
+                    v-model="startTimestamp"
+                    class="time-input"
+                    placeholder="01:12.250"
+                    autocomplete="off"
+                    @blur="normalizeTimestamp('start')"
+                  />
+                </label>
+                <label>
+                  <span>Конец</span>
+                  <input
+                    v-model="endTimestamp"
+                    class="time-input"
+                    placeholder="01:42.750"
+                    autocomplete="off"
+                    @blur="normalizeTimestamp('end')"
+                  />
+                </label>
+              </div>
+
+              <div class="selection-toolbar">
+                <div class="player-controls">
+                  <button type="button" :disabled="!canUseSelectionControls" @click="seekToSelectionStart">К началу</button>
+                  <button type="button" :disabled="!canUseSelectionControls" @click="seekToSelectionEnd">К концу</button>
+                  <button type="button" :disabled="!metadata" @click="setStartFromCurrent">Начало из позиции</button>
+                  <button type="button" :disabled="!metadata" @click="setEndFromCurrent">Конец из позиции</button>
+                </div>
+              </div>
+
+              <div class="trim-controls">
+                <div class="trim-control-group">
+                  <span>Начало</span>
+                  <button type="button" :disabled="!canUseSelectionControls" @click="nudgeStart(-1)">-1с</button>
+                  <button type="button" :disabled="!canUseSelectionControls" @click="nudgeStart(-0.1)">-0.1с</button>
+                  <button type="button" :disabled="!canUseSelectionControls" @click="nudgeStart(0.1)">+0.1с</button>
+                  <button type="button" :disabled="!canUseSelectionControls" @click="nudgeStart(1)">+1с</button>
+                </div>
+                <div class="trim-control-group">
+                  <span>Конец</span>
+                  <button type="button" :disabled="!canUseSelectionControls" @click="nudgeEnd(-1)">-1с</button>
+                  <button type="button" :disabled="!canUseSelectionControls" @click="nudgeEnd(-0.1)">-0.1с</button>
+                  <button type="button" :disabled="!canUseSelectionControls" @click="nudgeEnd(0.1)">+0.1с</button>
+                  <button type="button" :disabled="!canUseSelectionControls" @click="nudgeEnd(1)">+1с</button>
+                </div>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <aside class="side-panel">
+          <section class="side-section metadata-section">
+            <div class="panel-title-row">
+              <span class="section-kicker">Source</span>
+              <h2>Материал</h2>
+            </div>
+            <div v-if="metadata" class="media-card">
+              <img v-if="metadata.thumbnailUrl" :src="metadata.thumbnailUrl" alt="" />
+              <div class="media-copy">
+                <h3>{{ metadata.title }}</h3>
+                <p>{{ durationLabel }}</p>
+              </div>
+            </div>
+            <div v-else class="empty-state">
+              Metadata ещё не загружены.
+            </div>
+          </section>
+
+          <section class="side-section export-section">
+            <div class="panel-title-row">
+              <span class="section-kicker">Export</span>
+              <h2>Параметры</h2>
+              <span class="preview-state ready">{{ exportLabel }}</span>
+            </div>
+
+            <div class="format-toggle" role="radiogroup" aria-label="Формат экспорта">
+              <span>Формат</span>
+              <label>
+                <input v-model="exportFormat" type="radio" value="mp3" />
+                MP3
+              </label>
+              <label>
+                <input v-model="exportFormat" type="radio" value="mp4" />
+                MP4
+              </label>
+            </div>
+
+            <div
+              class="format-toggle quality-toggle"
+              :class="{ disabled: exportFormat !== 'mp4' }"
+              role="radiogroup"
+              aria-label="Качество MP4"
+            >
+              <span>Качество</span>
+              <label v-for="option in videoQualityOptions" :key="option.value">
+                <input v-model="videoQuality" type="radio" :value="option.value" :disabled="exportFormat !== 'mp4'" />
+                {{ option.label }}
+              </label>
+              <small v-if="exportFormat !== 'mp4'">Доступно при MP4. По умолчанию: 720p.</small>
+            </div>
+
+            <label for="folder">Папка сохранения</label>
+            <div class="input-row">
+              <input id="folder" :value="outputDirectory" readonly placeholder="Папка не выбрана" :title="outputDirectory" />
+              <button type="button" @click="selectOutputFolder">Выбрать</button>
+            </div>
+
+            <p v-if="plannedOutputPath" class="path-hint" :title="plannedOutputPath">{{ exportLabel }} будет сохранён: {{ plannedOutputPath }}</p>
+            <p v-if="lastOutputPath" class="path-hint" :title="lastOutputPath">Последний экспорт: {{ lastOutputPath }}</p>
+
+            <div class="action-row">
+              <button class="export-button primary-button" type="button" :disabled="!canExport" @click="exportClip">
+                {{ isExporting ? 'Экспорт...' : `Экспорт ${exportLabel}` }}
               </button>
-              <button
-                class="transport-segment-button"
-                type="button"
-                :disabled="!canUseSelectionControls"
-                :aria-label="selectionPlayButtonTitle"
-                :title="selectionPlayButtonTitle"
-                @click="toggleSelectedSegment"
-              >
-                {{ selectionPlayButtonLabel }}
+              <button type="button" :disabled="!canDownloadThumbnail" @click="downloadThumbnail">
+                {{ isDownloadingThumbnail ? 'Скачиваю...' : 'Скачать thumbnail' }}
               </button>
-              <span class="transport-time">{{ formatTimestamp(currentTime) }} / {{ durationLabel }}</span>
             </div>
-          </div>
-        </div>
-        <p v-if="previewError" class="inline-error">{{ previewError }}</p>
-        <p v-else class="path-hint">
-          Preview идёт через локальный streaming proxy без временных файлов. Если preview не загрузится, ручной ввод и экспорт всё равно доступны.
-        </p>
+          </section>
 
-        <div v-if="previewUrl" class="selection-toolbar">
-          <div class="selection-stats">
-            <span>Позиция: {{ formatTimestamp(currentTime) }}</span>
-            <span>Отрезок: {{ selectedDurationLabel }}</span>
-            <span>Start: {{ startSeconds !== undefined ? formatTimestamp(startSeconds) : '—' }}</span>
-            <span>End: {{ endSeconds !== undefined ? formatTimestamp(endSeconds) : '—' }}</span>
-          </div>
-          <div class="player-controls">
-            <button type="button" :disabled="!canUseSelectionControls" @click="seekToSelectionStart">К началу</button>
-            <button type="button" :disabled="!canUseSelectionControls" @click="seekToSelectionEnd">К концу</button>
-            <button type="button" @click="setStartFromCurrent">Начало из позиции</button>
-            <button type="button" @click="setEndFromCurrent">Конец из позиции</button>
-          </div>
-        </div>
+          <details class="side-section auth-panel">
+            <summary>
+              <span>Доступ YouTube</span>
+              <span class="preview-state" :class="useBrowserCookies || useCookieCache ? 'ready' : 'idle'">
+                {{ useBrowserCookies || useCookieCache ? 'Cookies включены' : 'Без cookies' }}
+              </span>
+            </summary>
 
-        <div class="clip-controls">
-          <TimelineSelector
-            v-if="durationSeconds > 0"
-            :duration="durationSeconds"
-            :current-time="currentTime"
-            :start="startSeconds ?? 0"
-            :end="endSeconds ?? Math.min(durationSeconds, MIN_FRAGMENT_SECONDS)"
-            :disabled="!canUseSelectionControls"
-            @update:start="setStartSeconds"
-            @update:end="setEndSeconds"
-          />
-
-          <div class="time-grid">
-            <label>
-              <span>Начало</span>
-              <input v-model="startTimestamp" placeholder="01:12.250" autocomplete="off" @blur="normalizeTimestamp('start')" />
+            <label class="checkbox-row">
+              <input v-model="useBrowserCookies" type="checkbox" @change="saveAuthSettings" />
+              <span>Использовать cookies из браузера для yt-dlp</span>
             </label>
-            <label>
-              <span>Конец</span>
-              <input v-model="endTimestamp" placeholder="01:42.750" autocomplete="off" @blur="normalizeTimestamp('end')" />
+
+            <label class="checkbox-row">
+              <input v-model="useCookieCache" type="checkbox" @change="saveAuthSettings" />
+              <span>Использовать локальный кэш cookies</span>
             </label>
-          </div>
 
-          <div class="trim-controls">
-            <div class="trim-control-group">
-              <span>Начало</span>
-              <button type="button" @click="nudgeStart(-1)">-1с</button>
-              <button type="button" @click="nudgeStart(-0.1)">-0.1с</button>
-              <button type="button" @click="nudgeStart(0.1)">+0.1с</button>
-              <button type="button" @click="nudgeStart(1)">+1с</button>
-              <button type="button" @click="setStartFromCurrent">Взять из позиции</button>
+            <div class="auth-controls">
+              <label>
+                <span>Браузер</span>
+                <select v-model="cookieBrowser" :disabled="!useBrowserCookies" @change="saveAuthSettings">
+                  <option v-for="option in cookieBrowserOptions" :key="option.value" :value="option.value">
+                    {{ option.label }}
+                  </option>
+                </select>
+              </label>
+              <button type="button" @click="openYouTubeSignIn">Открыть вход</button>
             </div>
-            <div class="trim-control-group">
-              <span>Конец</span>
-              <button type="button" @click="nudgeEnd(-1)">-1с</button>
-              <button type="button" @click="nudgeEnd(-0.1)">-0.1с</button>
-              <button type="button" @click="nudgeEnd(0.1)">+0.1с</button>
-              <button type="button" @click="nudgeEnd(1)">+1с</button>
-              <button type="button" @click="setEndFromCurrent">Взять из позиции</button>
+
+            <div class="cache-status">
+              <span>Кэш cookies</span>
+              <strong>{{ cookieCacheLabel }}</strong>
             </div>
-          </div>
-        </div>
+            <div class="auth-actions">
+              <button type="button" :disabled="!canRefreshCookieCache" @click="refreshCookieCache">
+                {{ isRefreshingCookieCache ? 'Обновляю...' : 'Обновить кэш' }}
+              </button>
+              <button type="button" :disabled="isClearingCookieCache || !cookieCacheStatus?.exists" @click="clearCookieCache">
+                {{ isClearingCookieCache ? 'Очищаю...' : 'Очистить' }}
+              </button>
+            </div>
+
+            <p class="path-hint">
+              Cookies не передаются в renderer. `yt-dlp` читает выбранный браузер или локальный app-data кэш в main-процессе.
+            </p>
+          </details>
+        </aside>
       </section>
 
-      <section class="panel">
-        <div class="panel-title-row">
-          <h2>Экспорт</h2>
-          <span class="preview-state ready">{{ exportLabel }}</span>
+      <footer class="status-bar" :class="[statusKind, { busy: isBusy }]" role="status" aria-live="polite">
+        <div class="status-main">
+          <span v-if="isBusy" class="status-dot"></span>
+          <strong>{{ progressMessage || statusMessage || 'Готов к работе' }}</strong>
+          <span v-if="isBusy">{{ elapsedSeconds }} сек.</span>
+          <span v-else-if="toolWarning">{{ toolWarning }}</span>
+          <span v-else>{{ metadata ? 'Metadata загружены' : 'Ожидаю ссылку YouTube' }}</span>
         </div>
-
-        <div class="format-toggle" role="radiogroup" aria-label="Формат экспорта">
-          <span>Формат</span>
-          <label>
-            <input v-model="exportFormat" type="radio" value="mp3" />
-            MP3
-          </label>
-          <label>
-            <input v-model="exportFormat" type="radio" value="mp4" />
-            MP4
-          </label>
+        <div class="status-detail">
+          <span v-if="errorDetails">{{ errorDetails }}</span>
+          <span v-else-if="lastOutputPath" :title="lastOutputPath">Последний экспорт: {{ lastOutputPath }}</span>
+          <span v-else-if="plannedOutputPath" :title="plannedOutputPath">План: {{ plannedOutputPath }}</span>
+          <span v-else>Локальная подготовка медиа для материалов, которые пользователь имеет право использовать.</span>
         </div>
-
-        <div class="format-toggle quality-toggle" :class="{ disabled: exportFormat !== 'mp4' }" role="radiogroup" aria-label="Качество MP4">
-          <span>Качество MP4</span>
-          <label v-for="option in videoQualityOptions" :key="option.value">
-            <input v-model="videoQuality" type="radio" :value="option.value" :disabled="exportFormat !== 'mp4'" />
-            {{ option.label }}
-          </label>
-          <small v-if="exportFormat !== 'mp4'">Выберите MP4, чтобы изменить качество. По умолчанию: 720p.</small>
-        </div>
-
-        <label for="folder">Папка для сохранения</label>
-        <div class="input-row">
-          <input id="folder" :value="outputDirectory" readonly placeholder="Папка не выбрана" />
-          <button type="button" @click="selectOutputFolder">Выбрать</button>
-        </div>
-
-        <p v-if="plannedOutputPath" class="path-hint">{{ exportLabel }} будет сохранён: {{ plannedOutputPath }}</p>
-        <p v-if="lastOutputPath" class="path-hint">Последний экспорт: {{ lastOutputPath }}</p>
-
-        <div class="action-row">
-          <button class="export-button" type="button" :disabled="!canExport" @click="exportClip">
-            {{ isExporting ? 'Экспорт...' : `Экспорт ${exportLabel}` }}
-          </button>
-          <button type="button" :disabled="!canDownloadThumbnail" @click="downloadThumbnail">
-            {{ isDownloadingThumbnail ? 'Скачиваю...' : 'Скачать thumbnail' }}
-          </button>
-        </div>
-      </section>
-
-      <section v-if="statusMessage" class="status" :class="statusKind" role="status">
-        <strong>{{ statusMessage }}</strong>
-        <p v-if="errorDetails">{{ errorDetails }}</p>
-      </section>
+      </footer>
     </section>
   </main>
 </template>

@@ -114,6 +114,19 @@ Windows-сборка сейчас настроена для локального
 - Проверка наличия `yt-dlp`, `ffmpeg`, `ffprobe`.
 - Понятные состояния успеха и ошибки в UI.
 
+## Выбранное дизайн-направление
+
+Текущий UI развивается в направлении `Dark Precision Utility`:
+
+- тёмная media-workspace эстетика;
+- плеер и timeline — визуальный центр приложения;
+- URL/source command bar сверху;
+- metadata/export/settings — компактная правая или нижняя панель;
+- status/errors — компактная нижняя status bar или inline-зона;
+- без SaaS/AI-dashboard стилистики;
+- без hero-блоков, glassmorphism, ярких градиентов и waveform на текущем этапе;
+- без тяжёлых UI-библиотек и внешних icon libraries без отдельного решения.
+
 ## Известные ограничения
 
 - Поддерживается только YouTube.

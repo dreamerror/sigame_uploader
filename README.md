@@ -16,6 +16,10 @@
 
 Renderer не вызывает `child_process`. Все вызовы `yt-dlp`, `ffmpeg` и `ffprobe` находятся в сервисах main-процесса и доступны renderer только через типизированный preload API.
 
+## Интерфейс
+
+Текущий UI оформлен в направлении `Dark Precision Utility`: тёмная desktop-workspace компоновка без SaaS/AI-dashboard стилистики. Сверху находится command bar со ссылкой YouTube и загрузкой metadata, в центре — preview-плеер и timeline выбора фрагмента, справа — metadata, output folder, параметры экспорта и доступ YouTube/cookies. Нижняя status bar показывает текущую операцию, ошибки, таймер и путь результата.
+
 ## Требования для Windows
 
 Установите:
