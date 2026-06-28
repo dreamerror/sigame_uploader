@@ -13,6 +13,7 @@ export type SiqQuestionType =
   | 'forYourself'
   | 'forAll'
 export type SiqAnswerType = 'text' | 'number' | 'point' | 'select' | 'client'
+export type SiqSelectionMode = '' | 'allPossible' | 'highest' | 'any' | 'exceptCurrent'
 
 export interface SiqMediaAsset {
   kind: SiqMediaKind
@@ -29,6 +30,11 @@ export interface SiqQuestionDraft {
   answerType?: SiqAnswerType
   answerOptions?: string[]
   answerDeviation?: string
+  selectionMode?: SiqSelectionMode
+  secretTheme?: string
+  secretPriceMinimum?: number
+  secretPriceMaximum?: number
+  secretPriceStep?: number
   acceptedAnswers?: string[]
   wrongAnswers?: string[]
   comments?: string

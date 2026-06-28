@@ -1,7 +1,15 @@
 <script setup lang="ts">
-import { computed, ref, toRaw } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, toRaw, watch } from 'vue'
 import type { AppErrorPayload } from '../../../shared/types'
-import type { SiqMediaKind, SiqPackageDraft, SiqQuestionDraft, SiqRoundDraft, SiqThemeDraft } from '../../../shared/siq'
+import type {
+  SiqMediaKind,
+  SiqPackageDraft,
+  SiqQuestionDraft,
+  SiqQuestionType,
+  SiqRoundDraft,
+  SiqSelectionMode,
+  SiqThemeDraft
+} from '../../../shared/siq'
 
 const props = defineProps<{
   lastExportPath: string
@@ -13,6 +21,25 @@ const emit = defineEmits<{
 
 type StatusKind = 'idle' | 'success' | 'error'
 type EditorSection = 'package' | 'round' | 'theme' | 'question' | 'media'
+type DragItem =
+  | { kind: 'round'; roundIndex: number }
+  | { kind: 'theme'; roundIndex: number; themeIndex: number }
+  | { kind: 'question'; roundIndex: number; themeIndex: number; questionIndex: number }
+interface PersistedPackageEditorState {
+  packageDraft: SiqPackageDraft
+  outputDirectory: string
+  outputFileName: string
+  loadedSourcePath: string
+  savedOutputPath: string
+  selectedRoundIndex: number
+  selectedThemeIndex: number
+  selectedQuestionIndex: number
+  collapsedRounds: string[]
+  collapsedThemes: string[]
+  collapsedQuestions: string[]
+  collapsedEditorSections: EditorSection[]
+  isPackageDirty: boolean
+}
 
 const questionTypeOptions = [
   { value: '', label: 'По умолчанию' },
@@ -34,6 +61,19 @@ const answerTypeOptions = [
   { value: 'select', label: 'Выбор варианта' },
   { value: 'client', label: 'Клиентский ввод' }
 ] as const
+const secretQuestionTypes = new Set<SiqQuestionType>(['secret', 'secretPublicPrice', 'secretNoQuestion'])
+const stakeQuestionTypes = new Set<SiqQuestionType>(['stake', 'stakeAll'])
+const secretSelectionOptions: Array<{ value: SiqSelectionMode; label: string }> = [
+  { value: 'exceptCurrent', label: 'Кроме текущего игрока' },
+  { value: 'any', label: 'Любому игроку' }
+]
+const stakeSelectionOptions: Array<{ value: SiqSelectionMode; label: string }> = [
+  { value: 'allPossible', label: 'Все, кто может ставить' },
+  { value: 'highest', label: 'Игрок с максимальной суммой' },
+  { value: 'any', label: 'Любой игрок' },
+  { value: 'exceptCurrent', label: 'Кроме текущего игрока' }
+]
+const packageEditorStorageKey = 'sigame-media-cutter:package-editor-state:v1'
 
 const packageDraft = ref<SiqPackageDraft>(createEmptyPackage())
 const outputDirectory = ref('')
@@ -53,6 +93,9 @@ const statusMessage = ref('')
 const errorDetails = ref('')
 const mediaPreviewUrl = ref('')
 const mediaPreviewError = ref('')
+const dragItem = ref<DragItem | undefined>()
+const isPackageDirty = ref(false)
+const isApplyingPersistedState = ref(false)
 
 const currentRound = computed(() => packageDraft.value.rounds[selectedRoundIndex.value])
 const currentTheme = computed(() => currentRound.value?.themes[selectedThemeIndex.value])
@@ -61,29 +104,63 @@ const currentQuestionMedia = computed(() => currentQuestion.value?.media)
 const canSave = computed(() => Boolean(outputDirectory.value.trim()) && Boolean(packageDraft.value.title.trim()) && !isBusy.value)
 const lastExportMediaKind = computed<SiqMediaKind | undefined>(() => mediaKindFromPath(props.lastExportPath))
 const mediaPreviewKind = computed(() => currentQuestionMedia.value?.kind)
+const draftWarningCount = computed(() => countDraftWarnings(packageDraft.value))
 collapseAllStructure()
+
+watch(
+  [
+    packageDraft,
+    outputDirectory,
+    outputFileName,
+    loadedSourcePath,
+    selectedRoundIndex,
+    selectedThemeIndex,
+    selectedQuestionIndex,
+    collapsedRounds,
+    collapsedThemes,
+    collapsedQuestions,
+    collapsedEditorSections
+  ],
+  () => {
+    if (!isApplyingPersistedState.value) {
+      isPackageDirty.value = true
+    }
+
+    persistPackageEditorState()
+  },
+  { deep: true, flush: 'sync' }
+)
+
+onMounted(() => {
+  restorePackageEditorState()
+  window.addEventListener('beforeunload', handleBeforeUnload)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('beforeunload', handleBeforeUnload)
+})
 
 function createEmptyPackage(): SiqPackageDraft {
   return {
     title: 'Новый пакет',
     author: '',
     difficulty: 5,
-    rounds: [createRound('1')]
+    rounds: [createRound('1', 'standard', 0)]
   }
 }
 
-function createRound(name: string, type: 'standard' | 'final' = 'standard'): SiqRoundDraft {
+function createRound(name: string, type: 'standard' | 'final' = 'standard', roundIndex = 0): SiqRoundDraft {
   return {
     name,
     type,
-    themes: [createTheme('Новая тема')]
+    themes: [createTheme('Новая тема', roundIndex)]
   }
 }
 
-function createTheme(name: string): SiqThemeDraft {
+function createTheme(name: string, roundIndex: number): SiqThemeDraft {
   return {
     name,
-    questions: [createQuestion(100)]
+    questions: [createQuestion(roundPriceStep(roundIndex))]
   }
 }
 
@@ -92,7 +169,7 @@ function createQuestion(price: number): SiqQuestionDraft {
     price,
     type: '',
     answerType: 'text',
-    text: 'Текст вопроса',
+    text: '',
     answer: ''
   }
 }
@@ -105,6 +182,8 @@ function newPackage(): void {
   collapseAllStructure()
   collapsedEditorSections.value = new Set()
   selectItem(0, 0, 0)
+  isPackageDirty.value = true
+  persistPackageEditorState()
   showStatus('idle', 'Создан новый черновик пакета.')
 }
 
@@ -143,6 +222,8 @@ async function openPackage(): Promise<void> {
     collapseAllStructure()
     collapsedEditorSections.value = new Set()
     selectItem(0, 0, 0)
+    isPackageDirty.value = false
+    persistPackageEditorState()
     showStatus('success', `Пакет открыт: ${imported.data.sourcePath}`)
   } catch (error) {
     showUnexpectedError(error, 'Не удалось открыть .siq пакет.')
@@ -193,6 +274,8 @@ async function savePackage(): Promise<void> {
     }
 
     savedOutputPath.value = result.data.outputPath
+    isPackageDirty.value = false
+    persistPackageEditorState()
     showStatus('success', `Пакет сохранён: ${result.data.outputPath}`)
   } catch (error) {
     showUnexpectedError(error, 'Не удалось сохранить .siq пакет.')
@@ -202,15 +285,19 @@ async function savePackage(): Promise<void> {
 }
 
 function addRound(): void {
-  packageDraft.value.rounds.push(createRound(String(packageDraft.value.rounds.length + 1)))
-  collapseAllStructure()
-  selectItem(packageDraft.value.rounds.length - 1, 0, 0)
+  const roundIndex = packageDraft.value.rounds.length
+
+  packageDraft.value.rounds.push(createRound(String(roundIndex + 1), 'standard', roundIndex))
+  collapseNewRound(roundIndex)
+  selectItem(roundIndex, 0, 0)
 }
 
 function addFinalRound(): void {
-  packageDraft.value.rounds.push(createRound('Финал', 'final'))
-  collapseAllStructure()
-  selectItem(packageDraft.value.rounds.length - 1, 0, 0)
+  const roundIndex = packageDraft.value.rounds.length
+
+  packageDraft.value.rounds.push(createRound('Финал', 'final', roundIndex))
+  collapseNewRound(roundIndex)
+  selectItem(roundIndex, 0, 0)
 }
 
 function removeRound(roundIndex: number): void {
@@ -230,8 +317,8 @@ function addThemeToRound(roundIndex: number): void {
     return
   }
 
-  round.themes.push(createTheme('Новая тема'))
-  collapseAllStructure()
+  round.themes.push(createTheme('Новая тема', roundIndex))
+  collapseNewTheme(roundIndex, round.themes.length - 1)
   selectItem(roundIndex, round.themes.length - 1, 0)
 }
 
@@ -253,8 +340,8 @@ function addQuestionToTheme(roundIndex: number, themeIndex: number): void {
     return
   }
 
-  theme.questions.push(createQuestion((theme.questions.length + 1) * 100))
-  collapseAllStructure()
+  theme.questions.push(createQuestion((theme.questions.length + 1) * roundPriceStep(roundIndex)))
+  collapseNewQuestion(roundIndex, themeIndex, theme.questions.length - 1)
   selectItem(roundIndex, themeIndex, theme.questions.length - 1)
 }
 
@@ -438,6 +525,200 @@ function collapseAllStructure(): void {
   collapsedQuestions.value = questionKeys
 }
 
+function collapseNewRound(roundIndex: number): void {
+  collapsedRounds.value = new Set([...collapsedRounds.value, `r:${roundIndex}`])
+  collapseNewTheme(roundIndex, 0)
+}
+
+function collapseNewTheme(roundIndex: number, themeIndex: number): void {
+  collapsedThemes.value = new Set([...collapsedThemes.value, `t:${roundIndex}:${themeIndex}`])
+  collapseNewQuestion(roundIndex, themeIndex, 0)
+}
+
+function collapseNewQuestion(roundIndex: number, themeIndex: number, questionIndex: number): void {
+  collapsedQuestions.value = new Set([...collapsedQuestions.value, `q:${roundIndex}:${themeIndex}:${questionIndex}`])
+}
+
+function roundPriceStep(roundIndex: number): number {
+  return (roundIndex + 1) * 100
+}
+
+function recalculateQuestionPrices(): void {
+  packageDraft.value.rounds.forEach((round, roundIndex) => {
+    const priceStep = roundPriceStep(roundIndex)
+
+    round.themes.forEach((theme) => {
+      theme.questions.forEach((question, questionIndex) => {
+        question.price = (questionIndex + 1) * priceStep
+      })
+    })
+  })
+}
+
+function startDrag(item: DragItem, event: DragEvent): void {
+  dragItem.value = item
+  event.dataTransfer?.setData('text/plain', JSON.stringify(item))
+
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move'
+  }
+}
+
+function endDrag(): void {
+  dragItem.value = undefined
+}
+
+function dropRound(targetRoundIndex: number): void {
+  const item = dragItem.value
+
+  if (!item || item.kind !== 'round' || item.roundIndex === targetRoundIndex) {
+    return
+  }
+
+  moveArrayItem(packageDraft.value.rounds, item.roundIndex, targetRoundIndex)
+  recalculateQuestionPrices()
+  selectItem(targetRoundIndex, 0, 0)
+  endDrag()
+}
+
+function dropTheme(roundIndex: number, targetThemeIndex: number): void {
+  const item = dragItem.value
+  const themes = packageDraft.value.rounds[roundIndex]?.themes
+
+  if (!item || item.kind !== 'theme' || item.roundIndex !== roundIndex || !themes || item.themeIndex === targetThemeIndex) {
+    return
+  }
+
+  moveArrayItem(themes, item.themeIndex, targetThemeIndex)
+  recalculateQuestionPrices()
+  selectItem(roundIndex, targetThemeIndex, 0)
+  endDrag()
+}
+
+function dropQuestion(roundIndex: number, themeIndex: number, targetQuestionIndex: number): void {
+  const item = dragItem.value
+  const questions = packageDraft.value.rounds[roundIndex]?.themes[themeIndex]?.questions
+
+  if (
+    !item ||
+    item.kind !== 'question' ||
+    item.roundIndex !== roundIndex ||
+    item.themeIndex !== themeIndex ||
+    !questions ||
+    item.questionIndex === targetQuestionIndex
+  ) {
+    return
+  }
+
+  moveArrayItem(questions, item.questionIndex, targetQuestionIndex)
+  recalculateQuestionPrices()
+  selectItem(roundIndex, themeIndex, targetQuestionIndex)
+  endDrag()
+}
+
+function moveArrayItem<T>(items: T[], fromIndex: number, toIndex: number): void {
+  const [item] = items.splice(fromIndex, 1)
+
+  if (!item) {
+    return
+  }
+
+  items.splice(toIndex, 0, item)
+}
+
+function isSecretQuestion(type?: SiqQuestionType): boolean {
+  return secretQuestionTypes.has(type ?? '')
+}
+
+function isStakeQuestion(type?: SiqQuestionType): boolean {
+  return stakeQuestionTypes.has(type ?? '')
+}
+
+function isQuestionDraftIncomplete(question: SiqQuestionDraft): boolean {
+  return !question.answer.trim() || (!question.text.trim() && !question.media)
+}
+
+function countDraftWarnings(packageValue: SiqPackageDraft): number {
+  return packageValue.rounds.reduce(
+    (total, round) =>
+      total +
+      round.themes.reduce(
+        (themeTotal, theme) => themeTotal + theme.questions.filter((question) => isQuestionDraftIncomplete(question)).length,
+        0
+      ),
+    0
+  )
+}
+
+function persistPackageEditorState(): void {
+  try {
+    const state: PersistedPackageEditorState = {
+      packageDraft: cloneForIpc(packageDraft.value),
+      outputDirectory: outputDirectory.value,
+      outputFileName: outputFileName.value,
+      loadedSourcePath: loadedSourcePath.value,
+      savedOutputPath: savedOutputPath.value,
+      selectedRoundIndex: selectedRoundIndex.value,
+      selectedThemeIndex: selectedThemeIndex.value,
+      selectedQuestionIndex: selectedQuestionIndex.value,
+      collapsedRounds: [...collapsedRounds.value],
+      collapsedThemes: [...collapsedThemes.value],
+      collapsedQuestions: [...collapsedQuestions.value],
+      collapsedEditorSections: [...collapsedEditorSections.value],
+      isPackageDirty: isPackageDirty.value
+    }
+
+    localStorage.setItem(packageEditorStorageKey, JSON.stringify(state))
+  } catch {
+    // localStorage may be unavailable; package export remains the source of truth.
+  }
+}
+
+function restorePackageEditorState(): void {
+  const rawState = localStorage.getItem(packageEditorStorageKey)
+
+  if (!rawState) {
+    return
+  }
+
+  try {
+    const state = JSON.parse(rawState) as Partial<PersistedPackageEditorState>
+
+    if (!state.packageDraft?.rounds?.length) {
+      return
+    }
+
+    isApplyingPersistedState.value = true
+    packageDraft.value = state.packageDraft
+    outputDirectory.value = state.outputDirectory ?? ''
+    outputFileName.value = state.outputFileName ?? ''
+    loadedSourcePath.value = state.loadedSourcePath ?? ''
+    savedOutputPath.value = state.savedOutputPath ?? ''
+    collapsedRounds.value = new Set(state.collapsedRounds ?? [])
+    collapsedThemes.value = new Set(state.collapsedThemes ?? [])
+    collapsedQuestions.value = new Set(state.collapsedQuestions ?? [])
+    collapsedEditorSections.value = new Set(state.collapsedEditorSections ?? [])
+    selectItem(state.selectedRoundIndex ?? 0, state.selectedThemeIndex ?? 0, state.selectedQuestionIndex ?? 0)
+    isPackageDirty.value = Boolean(state.isPackageDirty)
+    showStatus('idle', 'Восстановлен последний черновик пакета.')
+  } catch {
+    localStorage.removeItem(packageEditorStorageKey)
+  } finally {
+    isApplyingPersistedState.value = false
+  }
+}
+
+function handleBeforeUnload(event: BeforeUnloadEvent): void {
+  persistPackageEditorState()
+
+  if (!isPackageDirty.value) {
+    return
+  }
+
+  event.preventDefault()
+  event.returnValue = 'В редакторе пакета есть несохранённые изменения. Закрыть приложение?'
+}
+
 function mediaKindFromPath(value: string): SiqMediaKind | undefined {
   const lower = value.toLowerCase()
 
@@ -530,6 +811,9 @@ function eventValue(event: Event): string {
       <div class="panel-title-row">
         <span class="section-kicker">Package editor</span>
         <h1>Редактор пакета</h1>
+        <span v-if="draftWarningCount > 0" class="draft-warning-pill">
+          Черновиковые вопросы: {{ draftWarningCount }}
+        </span>
       </div>
       <div class="header-actions">
         <button type="button" @click="newPackage">Новый</button>
@@ -592,6 +876,7 @@ function eventValue(event: Event): string {
                   type="button"
                   class="tree-node question-node"
                   :class="{
+                    invalid: isQuestionDraftIncomplete(question),
                     selected:
                       selectedRoundIndex === roundIndex &&
                       selectedThemeIndex === themeIndex &&
@@ -663,6 +948,8 @@ function eventValue(event: Event): string {
           :key="roundIndex"
           class="workspace-panel package-section document-round"
           :class="{ selected: selectedRoundIndex === roundIndex }"
+          @dragover.prevent
+          @drop.prevent="dropRound(roundIndex)"
         >
           <div class="panel-header compact">
             <div class="panel-title-row">
@@ -670,6 +957,15 @@ function eventValue(event: Event): string {
               <h2>{{ round.name || 'Раунд без названия' }}</h2>
             </div>
             <div class="header-actions">
+              <span
+                class="drag-handle"
+                draggable="true"
+                title="Перетащить раунд"
+                @dragstart="startDrag({ kind: 'round', roundIndex }, $event)"
+                @dragend="endDrag"
+              >
+                ⇅
+              </span>
               <button type="button" @click="addThemeToRound(roundIndex)">+ Тема</button>
               <button type="button" :disabled="packageDraft.rounds.length <= 1" @click="removeRound(roundIndex)">Удалить</button>
               <button type="button" class="section-collapse-button" :aria-expanded="!isRoundCollapsed(roundIndex)" @click="toggleRound(roundIndex)">
@@ -698,6 +994,8 @@ function eventValue(event: Event): string {
               :key="themeIndex"
               class="document-theme"
               :class="{ selected: selectedRoundIndex === roundIndex && selectedThemeIndex === themeIndex }"
+              @dragover.prevent
+              @drop.stop.prevent="dropTheme(roundIndex, themeIndex)"
             >
               <div class="panel-header compact">
                 <div class="panel-title-row">
@@ -705,6 +1003,15 @@ function eventValue(event: Event): string {
                   <h3>{{ theme.name || 'Тема без названия' }}</h3>
                 </div>
                 <div class="header-actions">
+                  <span
+                    class="drag-handle"
+                    draggable="true"
+                    title="Перетащить тему"
+                    @dragstart.stop="startDrag({ kind: 'theme', roundIndex, themeIndex }, $event)"
+                    @dragend.stop="endDrag"
+                  >
+                    ⇅
+                  </span>
                   <button type="button" @click="addQuestionToTheme(roundIndex, themeIndex)">+ Вопрос</button>
                   <button type="button" :disabled="round.themes.length <= 1" @click="removeTheme(roundIndex, themeIndex)">Удалить</button>
                   <button
@@ -735,11 +1042,14 @@ function eventValue(event: Event): string {
                   :key="questionIndex"
                   class="document-question"
                   :class="{
+                    invalid: isQuestionDraftIncomplete(question),
                     selected:
                       selectedRoundIndex === roundIndex &&
                       selectedThemeIndex === themeIndex &&
                       selectedQuestionIndex === questionIndex
                   }"
+                  @dragover.prevent
+                  @drop.stop.prevent="dropQuestion(roundIndex, themeIndex, questionIndex)"
                 >
                   <div class="panel-header compact">
                     <div class="panel-title-row">
@@ -747,6 +1057,15 @@ function eventValue(event: Event): string {
                       <h3>{{ question.price }}: {{ question.answer || 'Без ответа' }}</h3>
                     </div>
                     <div class="header-actions">
+                      <span
+                        class="drag-handle"
+                        draggable="true"
+                        title="Перетащить вопрос"
+                        @dragstart.stop="startDrag({ kind: 'question', roundIndex, themeIndex, questionIndex }, $event)"
+                        @dragend.stop="endDrag"
+                      >
+                        ⇅
+                      </span>
                       <button type="button" :disabled="theme.questions.length <= 1" @click="removeQuestion(roundIndex, themeIndex, questionIndex)">Удалить</button>
                       <button
                         type="button"
@@ -790,6 +1109,58 @@ function eventValue(event: Event): string {
                         <input v-model="question.answerDeviation" placeholder="Для числа/точки" autocomplete="off" @focus="selectItem(roundIndex, themeIndex, questionIndex)" />
                       </label>
                     </div>
+
+                    <section v-if="isSecretQuestion(question.type)" class="special-question-panel">
+                      <div class="panel-title-row">
+                        <span class="section-kicker">Secret</span>
+                        <h3>Параметры секрета</h3>
+                      </div>
+                      <div class="editor-grid">
+                        <label>
+                          <span>Тема секрета</span>
+                          <input v-model="question.secretTheme" autocomplete="off" @focus="selectItem(roundIndex, themeIndex, questionIndex)" />
+                        </label>
+                        <label>
+                          <span>Кому можно отдать</span>
+                          <select v-model="question.selectionMode" @focus="selectItem(roundIndex, themeIndex, questionIndex)">
+                            <option value="">По умолчанию SiGame</option>
+                            <option v-for="option in secretSelectionOptions" :key="option.value" :value="option.value">
+                              {{ option.label }}
+                            </option>
+                          </select>
+                        </label>
+                        <label>
+                          <span>Мин. цена</span>
+                          <input v-model.number="question.secretPriceMinimum" type="number" min="0" step="100" @focus="selectItem(roundIndex, themeIndex, questionIndex)" />
+                        </label>
+                        <label>
+                          <span>Макс. цена</span>
+                          <input v-model.number="question.secretPriceMaximum" type="number" min="0" step="100" @focus="selectItem(roundIndex, themeIndex, questionIndex)" />
+                        </label>
+                        <label>
+                          <span>Шаг цены</span>
+                          <input v-model.number="question.secretPriceStep" type="number" min="1" step="100" @focus="selectItem(roundIndex, themeIndex, questionIndex)" />
+                        </label>
+                      </div>
+                    </section>
+
+                    <section v-if="isStakeQuestion(question.type)" class="special-question-panel">
+                      <div class="panel-title-row">
+                        <span class="section-kicker">Stake</span>
+                        <h3>Параметры ставки</h3>
+                      </div>
+                      <div class="editor-grid">
+                        <label>
+                          <span>Режим выбора</span>
+                          <select v-model="question.selectionMode" @focus="selectItem(roundIndex, themeIndex, questionIndex)">
+                            <option value="">По умолчанию SiGame</option>
+                            <option v-for="option in stakeSelectionOptions" :key="option.value" :value="option.value">
+                              {{ option.label }}
+                            </option>
+                          </select>
+                        </label>
+                      </div>
+                    </section>
 
                     <label>
                       <span>Текст вопроса</span>

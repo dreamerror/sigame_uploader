@@ -118,13 +118,7 @@ export class SiqPackageService {
             throw new AppError('siq-failure', 'Стоимость вопроса должна быть положительным числом.')
           }
 
-          if (!question.text.trim() && !question.media) {
-            throw new AppError('siq-failure', 'Добавьте текст вопроса или медиафайл.')
-          }
-
-          if (!question.answer.trim()) {
-            throw new AppError('siq-failure', 'Укажите правильный ответ.')
-          }
+          // Draft packages may intentionally contain unfinished questions.
         }
       }
     }
@@ -288,7 +282,35 @@ export class SiqPackageService {
       params.push(`<param name="answerDeviation">${escapeXml(question.answerDeviation.trim())}</param>`)
     }
 
+    if (question.selectionMode?.trim()) {
+      params.push(`<param name="selectionMode">${escapeXml(question.selectionMode.trim())}</param>`)
+    }
+
+    if (this.isSecretQuestion(question.type)) {
+      if (question.secretTheme?.trim()) {
+        params.push(`<param name="theme">${escapeXml(question.secretTheme.trim())}</param>`)
+      }
+
+      if (
+        Number.isFinite(question.secretPriceMinimum) ||
+        Number.isFinite(question.secretPriceMaximum) ||
+        Number.isFinite(question.secretPriceStep)
+      ) {
+        const minimum = Number.isFinite(question.secretPriceMinimum) ? Number(question.secretPriceMinimum) : question.price
+        const maximum = Number.isFinite(question.secretPriceMaximum) ? Number(question.secretPriceMaximum) : question.price
+        const step = Number.isFinite(question.secretPriceStep) && Number(question.secretPriceStep) > 0 ? Number(question.secretPriceStep) : 100
+
+        params.push(
+          `<param name="price" type="numberSet"><numberSet minimum="${minimum}" maximum="${maximum}" step="${step}" /></param>`
+        )
+      }
+    }
+
     return params.join('')
+  }
+
+  private isSecretQuestion(type?: string): boolean {
+    return type === 'secret' || type === 'secretPublicPrice' || type === 'secretNoQuestion'
   }
 
   private createWrongAnswersXml(answers: string[] = []): string {
@@ -366,6 +388,9 @@ export class SiqPackageService {
         answerType: getParamValue(questionBody, 'answerType') as SiqPackageDraft['rounds'][number]['themes'][number]['questions'][number]['answerType'],
         answerOptions: getParamValue(questionBody, 'answerOptions').split(/\r?\n/).map((option) => option.trim()).filter(Boolean),
         answerDeviation: getParamValue(questionBody, 'answerDeviation'),
+        selectionMode: getParamValue(questionBody, 'selectionMode') as SiqPackageDraft['rounds'][number]['themes'][number]['questions'][number]['selectionMode'],
+        secretTheme: getParamValue(questionBody, 'theme'),
+        ...getNumberSetParam(questionBody, 'price'),
         comments: readComments(questionBody),
         media: parsedItems.media
       })
@@ -508,6 +533,34 @@ function readAnswers(value: string, sectionName: 'right' | 'wrong'): string[] {
 function getParamValue(value: string, name: string): string {
   const pattern = new RegExp(`<param\\b[^>]*name=["']${name}["'][^>]*>([\\s\\S]*?)<\\/param>`, 'i')
   return unescapeXml(firstMatch(value, pattern)).trim()
+}
+
+function getNumberSetParam(
+  value: string,
+  name: string
+): { secretPriceMinimum?: number; secretPriceMaximum?: number; secretPriceStep?: number } {
+  const pattern = new RegExp(`<param\\b[^>]*name=["']${name}["'][^>]*>([\\s\\S]*?)<\\/param>`, 'i')
+  const paramBody = firstMatch(value, pattern)
+  const numberSetOpen = paramBody.match(/<numberSet\b[^>]*>/i)?.[0] ?? ''
+
+  if (!numberSetOpen) {
+    return {}
+  }
+
+  return {
+    secretPriceMinimum: toOptionalNumber(getAttribute(numberSetOpen, 'minimum')),
+    secretPriceMaximum: toOptionalNumber(getAttribute(numberSetOpen, 'maximum')),
+    secretPriceStep: toOptionalNumber(getAttribute(numberSetOpen, 'step'))
+  }
+}
+
+function toOptionalNumber(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined
+  }
+
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : undefined
 }
 
 function isSupportedMediaKind(value: string): value is SiqMediaKind {
