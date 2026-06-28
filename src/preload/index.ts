@@ -15,6 +15,7 @@ import type {
   ThumbnailDownloadResult,
   ToolStatus
 } from '../shared/types'
+import type { SiqPackageExportRequest, SiqPackageExportResult } from '../shared/siq'
 
 const api: SigameApi = {
   checkTools: () => ipcRenderer.invoke(IPC_CHANNELS.checkTools) as Promise<ApiResult<ToolStatus>>,
@@ -33,6 +34,8 @@ const api: SigameApi = {
     ipcRenderer.invoke(IPC_CHANNELS.exportClip, request) as Promise<ApiResult<ExportResult>>,
   downloadThumbnail: (request: ThumbnailDownloadRequest) =>
     ipcRenderer.invoke(IPC_CHANNELS.downloadThumbnail, request) as Promise<ApiResult<ThumbnailDownloadResult>>,
+  createSiqPackage: (request: SiqPackageExportRequest) =>
+    ipcRenderer.invoke(IPC_CHANNELS.createSiqPackage, request) as Promise<ApiResult<SiqPackageExportResult>>,
   openYouTubeSignIn: () => ipcRenderer.invoke(IPC_CHANNELS.openYouTubeSignIn) as Promise<ApiResult<void>>
 }
 

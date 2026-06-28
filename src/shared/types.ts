@@ -1,3 +1,5 @@
+import type { SiqPackageExportRequest, SiqPackageExportResult } from './siq'
+
 export interface MediaMetadata {
   sourceUrl: string
   title: string
@@ -81,6 +83,7 @@ export type AppErrorCode =
   | 'metadata-failure'
   | 'preview-failure'
   | 'cookie-cache-failure'
+  | 'siq-failure'
   | 'folder-selection-cancelled'
   | 'unexpected-error'
 
@@ -102,5 +105,6 @@ export interface SigameApi {
   selectOutputFolder(): Promise<ApiResult<string>>
   exportClip(request: MediaCutRequest): Promise<ApiResult<ExportResult>>
   downloadThumbnail(request: ThumbnailDownloadRequest): Promise<ApiResult<ThumbnailDownloadResult>>
+  createSiqPackage(request: SiqPackageExportRequest): Promise<ApiResult<SiqPackageExportResult>>
   openYouTubeSignIn(): Promise<ApiResult<void>>
 }

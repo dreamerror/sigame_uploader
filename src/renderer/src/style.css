@@ -747,6 +747,12 @@ h3 {
   flex: 1 1 150px;
 }
 
+.siq-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px;
+  gap: 8px;
+}
+
 .auth-panel {
   gap: 11px;
 }
@@ -1006,6 +1012,7 @@ h3 {
   .source-form,
   .input-row,
   .time-grid,
+  .siq-grid,
   .auth-controls,
   .status-bar {
     grid-template-columns: 1fr;

@@ -44,6 +44,8 @@ SiGame Media Cutter — локальная некоммерческая наст
 - `PreviewProxyService`
 - `ThumbnailService`
 - `CookieCacheService`
+- `SiqPackageService`
+- `ZipArchiveService`
 - Общие типы API находятся в `src/shared/types.ts`.
 - IPC-каналы находятся в `src/shared/ipc.ts`.
 - Preload bridge находится в `src/preload/index.ts`.
@@ -53,6 +55,8 @@ SiGame Media Cutter — локальная некоммерческая наст
 - `src/main/index.ts` — создание окна, регистрация IPC handlers, сборка сервисов.
 - `src/main/services/` — main-process сервисы для внешних инструментов и экспорта.
 - `src/main/services/CookieCacheService.ts` — локальный кэш cookies в папке данных приложения.
+- `src/main/services/SiqPackageService.ts` — создание минимального `.siq` пакета в main-process.
+- `src/main/services/ZipArchiveService.ts` — простой ZIP writer для `.siq` без внешних зависимостей.
 - `src/preload/index.ts` — типизированный API, доступный renderer как `window.sigameApi`.
 - `src/shared/types.ts` — общие типы `MediaMetadata`, `MediaCutRequest`, `ApiResult` и ошибки.
 - `src/shared/siq.ts` — черновые типы будущей генерации `.siq` пакетов.
@@ -109,6 +113,7 @@ Windows-сборка сейчас настроена для локального
 - Экспорт MP3/MP4 через `yt-dlp` + `ffmpeg`.
 - Выбор качества MP4-экспорта: 360p, 480p, 720p по умолчанию, 1080p, best.
 - Скачивание thumbnail в выбранную папку через main-process `ThumbnailService`.
+- Создание минимального `.siq` пакета из последнего экспортированного MP3/MP4: один раунд, одна тема, один вопрос, один вложенный медиафайл.
 - Опциональное использование cookies браузера для `yt-dlp` через `--cookies-from-browser`, если YouTube требует sign-in/anti-bot подтверждение.
 - Опциональный локальный кэш cookies для `yt-dlp` через `--cookies`, который обновляется из выбранного браузера только по действию пользователя.
 - Если включены и browser cookies, и локальный кэш, обычные metadata/preview/export запросы должны сначала пробовать `--cookies-from-browser`, а затем fallback на локальный `--cookies`. Обновление кэша остаётся отдельным режимом, где оба аргумента используются вместе для записи cookie-файла.
@@ -140,8 +145,8 @@ Windows-сборка сейчас настроена для локального
 - Нет Freesound/Jamendo.
 - Нет Яндекс.Музыки.
 - Нет собственной авторизации в приложении; есть только явная локальная передача браузерной сессии в `yt-dlp` по выбору пользователя.
-- Нет сборки полноценного SiGame-пакета.
-- Нет создания `.siq` файла; текущие `src/shared/siq.ts` и `SIQ_INTEGRATION_NOTES.md` — только подготовительная основа.
+- Нет полноценного редактора SiGame-пакетов, импорта существующих `.siq` и управления несколькими раундами/темами/вопросами.
+- Минимальная генерация `.siq` уже есть, но её совместимость нужно проверять в SiQuester на реальных пакетах.
 - Нет отдельного экрана настроек путей к бинарникам.
 - Нет автоматических тестов живого экспорта.
 - Desktop-сборка пока не включает `yt-dlp`, `ffmpeg`, `ffprobe` внутрь приложения.
@@ -178,6 +183,7 @@ ffprobe -version
 - Сохраняйте чистые границы сервисов main-процесса.
 - Не переносите `child_process` в renderer.
 - Preview-логика, связанная с `yt-dlp`, должна оставаться в main-процессе.
+- Renderer не должен писать `.siq`, ZIP, XML или читать медиафайлы напрямую; генерация пакетов должна оставаться в main-process сервисах.
 - Renderer не должен получать прямой YouTube/Googlevideo URL для preview, если можно использовать локальный main-process proxy.
 - Renderer не должен читать cookies напрямую. Для YouTube sign-in/anti-bot случаев передавайте в main-process только выбранный браузер, а cookies должен читать `yt-dlp` через `--cookies-from-browser`.
 - Если используется кэш cookies, renderer не должен получать путь к cookie-файлу или содержимое cookies. Управление файлом должно оставаться в main-process `CookieCacheService`, а `yt-dlp` должен получать только `--cookies`.

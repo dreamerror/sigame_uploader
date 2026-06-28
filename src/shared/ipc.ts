@@ -8,5 +8,6 @@ export const IPC_CHANNELS = {
   selectOutputFolder: 'dialog:select-output-folder',
   exportClip: 'media:export-clip',
   downloadThumbnail: 'media:download-thumbnail',
+  createSiqPackage: 'siq:create-package',
   openYouTubeSignIn: 'external:open-youtube-sign-in'
 } as const

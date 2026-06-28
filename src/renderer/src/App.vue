@@ -10,6 +10,7 @@ import type {
   VideoQuality,
   YtDlpAuthSettings
 } from '../../shared/types'
+import type { SiqMediaKind } from '../../shared/siq'
 import SeekTimeline from './components/SeekTimeline.vue'
 import TimelineSelector from './components/TimelineSelector.vue'
 
@@ -51,12 +52,21 @@ const isLoadingMetadata = ref(false)
 const isPreparingPreview = ref(false)
 const isExporting = ref(false)
 const isDownloadingThumbnail = ref(false)
+const isCreatingSiq = ref(false)
 const isRefreshingCookieCache = ref(false)
 const isClearingCookieCache = ref(false)
 const statusKind = ref<'idle' | 'success' | 'error'>('idle')
 const statusMessage = ref('')
 const errorDetails = ref('')
 const lastOutputPath = ref('')
+const lastSiqOutputPath = ref('')
+const siqPackageTitle = ref('')
+const siqAuthor = ref('')
+const siqRoundName = ref('1')
+const siqThemeName = ref('')
+const siqQuestionText = ref('')
+const siqAnswer = ref('')
+const siqQuestionPrice = ref(100)
 const progressMessage = ref('')
 const elapsedSeconds = ref(0)
 const previewUrl = ref('')
@@ -105,6 +115,33 @@ const canDownloadThumbnail = computed(
     !isDownloadingThumbnail.value
 )
 
+const lastExportMediaKind = computed<SiqMediaKind | undefined>(() => {
+  const lowerPath = lastOutputPath.value.toLowerCase()
+
+  if (lowerPath.endsWith('.mp3')) {
+    return 'audio'
+  }
+
+  if (lowerPath.endsWith('.mp4')) {
+    return 'video'
+  }
+
+  return undefined
+})
+const canCreateSiq = computed(
+  () =>
+    Boolean(lastOutputPath.value) &&
+    Boolean(lastExportMediaKind.value) &&
+    Boolean(outputDirectory.value.trim()) &&
+    Boolean(siqPackageTitle.value.trim()) &&
+    Boolean(siqRoundName.value.trim()) &&
+    Boolean(siqThemeName.value.trim()) &&
+    Boolean(siqAnswer.value.trim()) &&
+    Number.isFinite(Number(siqQuestionPrice.value)) &&
+    Number(siqQuestionPrice.value) > 0 &&
+    !isCreatingSiq.value
+)
+
 const canUseSelectionControls = computed(() => durationSeconds.value > 0 && startSeconds.value !== undefined && endSeconds.value !== undefined)
 const isBusy = computed(
   () =>
@@ -112,6 +149,7 @@ const isBusy = computed(
     isPreparingPreview.value ||
     isExporting.value ||
     isDownloadingThumbnail.value ||
+    isCreatingSiq.value ||
     isRefreshingCookieCache.value ||
     isClearingCookieCache.value
 )
@@ -378,6 +416,7 @@ async function selectOutputFolder(): Promise<void> {
 
   outputDirectory.value = result.data
   lastOutputPath.value = ''
+  lastSiqOutputPath.value = ''
 }
 
 function onPlayerTimeUpdate(): void {
@@ -673,12 +712,92 @@ async function exportClip(): Promise<void> {
 
     statusKind.value = 'success'
     lastOutputPath.value = result.data.outputPath
+    lastSiqOutputPath.value = ''
+    ensureDefaultSiqDraft()
     statusMessage.value = `${exportLabel.value} экспортирован: ${result.data.outputPath}`
   } catch (error) {
     showUnexpectedError(error, 'Не удалось завершить экспорт.')
   } finally {
     isExporting.value = false
     stopProgress()
+  }
+}
+
+async function createSiqPackage(): Promise<void> {
+  const api = getApi()
+
+  if (!api || !lastExportMediaKind.value) {
+    return
+  }
+
+  clearStatus()
+  isCreatingSiq.value = true
+  startProgress('Создаю минимальный .siq пакет из последнего экспортированного фрагмента.')
+
+  try {
+    const result = await api.createSiqPackage({
+      outputDirectory: outputDirectory.value,
+      outputFileName: siqPackageTitle.value,
+      package: {
+        title: siqPackageTitle.value,
+        author: siqAuthor.value || undefined,
+        difficulty: 5,
+        rounds: [
+          {
+            name: siqRoundName.value,
+            themes: [
+              {
+                name: siqThemeName.value,
+                questions: [
+                  {
+                    price: Number(siqQuestionPrice.value),
+                    text: siqQuestionText.value,
+                    answer: siqAnswer.value,
+                    media: {
+                      kind: lastExportMediaKind.value,
+                      sourcePath: lastOutputPath.value,
+                      placement: lastExportMediaKind.value === 'audio' ? 'background' : undefined
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    })
+
+    if (!result.ok) {
+      showError(result.error)
+      return
+    }
+
+    statusKind.value = 'success'
+    lastSiqOutputPath.value = result.data.outputPath
+    statusMessage.value = `.siq пакет создан: ${result.data.outputPath}`
+  } catch (error) {
+    showUnexpectedError(error, 'Не удалось создать .siq пакет.')
+  } finally {
+    isCreatingSiq.value = false
+    stopProgress()
+  }
+}
+
+function ensureDefaultSiqDraft(): void {
+  if (!metadata.value) {
+    return
+  }
+
+  if (!siqPackageTitle.value.trim()) {
+    siqPackageTitle.value = sanitizeOutputBaseName(metadata.value.title)
+  }
+
+  if (!siqThemeName.value.trim()) {
+    siqThemeName.value = metadata.value.title
+  }
+
+  if (!siqQuestionText.value.trim()) {
+    siqQuestionText.value = 'Назовите источник или объект фрагмента.'
   }
 }
 
@@ -1277,6 +1396,67 @@ function clamp(value: number, min: number, max: number): number {
                 {{ isDownloadingThumbnail ? 'Скачиваю...' : 'Скачать thumbnail' }}
               </button>
             </div>
+          </section>
+
+          <section class="side-section siq-section">
+            <div class="panel-title-row">
+              <span class="section-kicker">SiGame</span>
+              <h2>Создать .siq</h2>
+            </div>
+
+            <p class="path-hint">
+              Первый тестовый slice: один раунд, одна тема, один вопрос и последний экспортированный MP3/MP4.
+            </p>
+
+            <label>
+              <span>Название пакета</span>
+              <input v-model="siqPackageTitle" placeholder="Название пакета" autocomplete="off" />
+            </label>
+
+            <label>
+              <span>Автор</span>
+              <input v-model="siqAuthor" placeholder="Необязательно" autocomplete="off" />
+            </label>
+
+            <div class="siq-grid">
+              <label>
+                <span>Раунд</span>
+                <input v-model="siqRoundName" autocomplete="off" />
+              </label>
+              <label>
+                <span>Цена</span>
+                <input v-model.number="siqQuestionPrice" type="number" min="1" step="100" />
+              </label>
+            </div>
+
+            <label>
+              <span>Тема</span>
+              <input v-model="siqThemeName" placeholder="Название темы" autocomplete="off" />
+            </label>
+
+            <label>
+              <span>Текст вопроса</span>
+              <input v-model="siqQuestionText" placeholder="Короткий текст вопроса" autocomplete="off" />
+            </label>
+
+            <label>
+              <span>Правильный ответ</span>
+              <input v-model="siqAnswer" placeholder="Ответ для SiGame" autocomplete="off" />
+            </label>
+
+            <p v-if="lastOutputPath" class="path-hint" :title="lastOutputPath">
+              Медиа для пакета: {{ lastOutputPath }}
+            </p>
+            <p v-else class="path-hint">
+              Сначала экспортируйте MP3 или MP4, затем можно создать минимальный пакет.
+            </p>
+            <p v-if="lastSiqOutputPath" class="path-hint" :title="lastSiqOutputPath">
+              Последний .siq: {{ lastSiqOutputPath }}
+            </p>
+
+            <button class="primary-button" type="button" :disabled="!canCreateSiq" @click="createSiqPackage">
+              {{ isCreatingSiq ? 'Создаю .siq...' : 'Создать .siq' }}
+            </button>
           </section>
 
           <details class="side-section auth-panel">

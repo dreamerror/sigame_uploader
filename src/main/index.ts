@@ -23,8 +23,10 @@ import { FfmpegService } from './services/FfmpegService'
 import { MediaProbeService } from './services/MediaProbeService'
 import { PreviewProxyService } from './services/PreviewProxyService'
 import { PreviewService } from './services/PreviewService'
+import { SiqPackageService } from './services/SiqPackageService'
 import { ThumbnailService } from './services/ThumbnailService'
 import { YtDlpService } from './services/YtDlpService'
+import type { SiqPackageExportRequest, SiqPackageExportResult } from '../shared/siq'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -36,6 +38,7 @@ const exportService = new ExportService(ytDlpService, ffmpegService, mediaProbeS
 const previewProxyService = new PreviewProxyService()
 const previewService = new PreviewService(ytDlpService, previewProxyService)
 const thumbnailService = new ThumbnailService()
+const siqPackageService = new SiqPackageService()
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -169,6 +172,10 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.downloadThumbnail, (_event, request: ThumbnailDownloadRequest) =>
     toResult<ThumbnailDownloadResult>(() => thumbnailService.downloadThumbnail(request))
+  )
+
+  ipcMain.handle(IPC_CHANNELS.createSiqPackage, (_event, request: SiqPackageExportRequest) =>
+    toResult<SiqPackageExportResult>(() => siqPackageService.exportPackage(request))
   )
 
   ipcMain.handle(IPC_CHANNELS.openYouTubeSignIn, () =>
