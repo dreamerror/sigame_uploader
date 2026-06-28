@@ -3,7 +3,15 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { AppError } from './AppError'
 import { ZipArchiveService } from './ZipArchiveService'
-import type { SiqMediaAsset, SiqPackageExportRequest, SiqPackageExportResult } from '../../shared/siq'
+import type {
+  SiqMediaAsset,
+  SiqMediaKind,
+  SiqPackageDraft,
+  SiqPackageExportRequest,
+  SiqPackageExportResult,
+  SiqPackageImportRequest,
+  SiqPackageImportResult
+} from '../../shared/siq'
 
 interface ArchiveMedia {
   asset: SiqMediaAsset
@@ -15,7 +23,39 @@ interface ArchiveMedia {
 const SIQ_NAMESPACE = 'https://github.com/VladimirKhil/SI/blob/master/assets/siq_5.xsd'
 
 export class SiqPackageService {
-  constructor(private readonly zipArchiveService = new ZipArchiveService()) {}
+  constructor(
+    private readonly extractRoot: string,
+    private readonly zipArchiveService = new ZipArchiveService()
+  ) {}
+
+  async importPackage(request: SiqPackageImportRequest): Promise<SiqPackageImportResult> {
+    try {
+      const entries = await this.zipArchiveService.readArchive(request.filePath)
+      const contentEntry = entries.find((entry) => entry.path.toLowerCase() === 'content.xml')
+
+      if (!contentEntry) {
+        throw new AppError('siq-failure', 'В .siq не найден content.xml.')
+      }
+
+      const extractDirectory = path.join(this.extractRoot, 'imported-siq', randomUUID())
+      const packageDraft = await this.parseContentXml(contentEntry.data.toString('utf8'), entries, extractDirectory)
+
+      return {
+        package: packageDraft,
+        sourcePath: request.filePath
+      }
+    } catch (error) {
+      if (error instanceof AppError) {
+        throw error
+      }
+
+      throw new AppError(
+        'siq-failure',
+        'Не удалось импортировать .siq пакет.',
+        error instanceof Error ? error.message : String(error)
+      )
+    }
+  }
 
   async exportPackage(request: SiqPackageExportRequest): Promise<SiqPackageExportResult> {
     this.validateRequest(request)
@@ -226,6 +266,130 @@ export class SiqPackageService {
     return `<item ${attributes.join(' ')}>${escapeXml(media.displayName)}</item>`
   }
 
+  private async parseContentXml(xml: string, entries: Array<{ path: string; data: Buffer }>, extractDirectory: string): Promise<SiqPackageDraft> {
+    const packageOpen = xml.match(/<package\b[^>]*>/i)?.[0] ?? ''
+    const packageDraft: SiqPackageDraft = {
+      title: unescapeXml(getAttribute(packageOpen, 'name') || 'Новый пакет'),
+      author: unescapeXml(firstMatch(xml, /<author>([\s\S]*?)<\/author>/i)),
+      tags: [...xml.matchAll(/<tag>([\s\S]*?)<\/tag>/gi)].map((match) => unescapeXml(match[1]).trim()).filter(Boolean),
+      difficulty: Number(getAttribute(packageOpen, 'difficulty')) || 5,
+      rounds: []
+    }
+
+    for (const roundMatch of xml.matchAll(/<round\b([^>]*)>([\s\S]*?)<\/round>/gi)) {
+      const roundAttributes = roundMatch[1]
+      const roundBody = roundMatch[2]
+      const roundName = unescapeXml(getAttribute(roundAttributes, 'name') || 'Раунд')
+      const roundType = getAttribute(roundAttributes, 'type')
+
+      packageDraft.rounds.push({
+        name: roundName,
+        type: roundType === 'final' || roundName.toLowerCase().includes('финал') ? 'final' : 'standard',
+        themes: await this.parseThemes(roundBody, entries, extractDirectory)
+      })
+    }
+
+    if (packageDraft.rounds.length === 0) {
+      throw new AppError('siq-failure', 'В .siq не найдено ни одного раунда.')
+    }
+
+    return packageDraft
+  }
+
+  private async parseThemes(xml: string, entries: Array<{ path: string; data: Buffer }>, extractDirectory: string) {
+    const themes: SiqPackageDraft['rounds'][number]['themes'] = []
+
+    for (const themeMatch of xml.matchAll(/<theme\b([^>]*)>([\s\S]*?)<\/theme>/gi)) {
+      const themeBody = themeMatch[2]
+
+      themes.push({
+        name: unescapeXml(getAttribute(themeMatch[1], 'name') || 'Тема'),
+        comments: readComments(themeBody),
+        questions: await this.parseQuestions(themeBody, entries, extractDirectory)
+      })
+    }
+
+    return themes
+  }
+
+  private async parseQuestions(xml: string, entries: Array<{ path: string; data: Buffer }>, extractDirectory: string) {
+    const questions: SiqPackageDraft['rounds'][number]['themes'][number]['questions'] = []
+
+    for (const questionMatch of xml.matchAll(/<question\b([^>]*)>([\s\S]*?)<\/question>/gi)) {
+      const questionBody = questionMatch[2]
+      const parsedItems = await this.parseQuestionItems(questionBody, entries, extractDirectory)
+
+      questions.push({
+        price: Number(getAttribute(questionMatch[1], 'price')) || 100,
+        text: parsedItems.text,
+        answer: unescapeXml(firstMatch(questionBody, /<answer>([\s\S]*?)<\/answer>/i)),
+        comments: readComments(questionBody),
+        media: parsedItems.media
+      })
+    }
+
+    return questions
+  }
+
+  private async parseQuestionItems(
+    xml: string,
+    entries: Array<{ path: string; data: Buffer }>,
+    extractDirectory: string
+  ): Promise<{ text: string; media?: SiqMediaAsset }> {
+    const textItems: string[] = []
+    let media: SiqMediaAsset | undefined
+
+    for (const itemMatch of xml.matchAll(/<item\b([^>]*)>([\s\S]*?)<\/item>/gi)) {
+      const attributes = itemMatch[1]
+      const content = unescapeXml(itemMatch[2]).trim()
+      const kind = getAttribute(attributes, 'type') as SiqMediaKind | undefined
+      const isRef = getAttribute(attributes, 'isRef')?.toLowerCase() === 'true'
+
+      if (!kind) {
+        textItems.push(content)
+        continue
+      }
+
+      if (!media && isSupportedMediaKind(kind) && isRef) {
+        media = await this.extractMediaAsset(kind, content, getAttribute(attributes, 'placement'), entries, extractDirectory)
+      }
+    }
+
+    return {
+      text: textItems.join('\n'),
+      media
+    }
+  }
+
+  private async extractMediaAsset(
+    kind: SiqMediaKind,
+    displayName: string,
+    placement: string | undefined,
+    entries: Array<{ path: string; data: Buffer }>,
+    extractDirectory: string
+  ): Promise<SiqMediaAsset | undefined> {
+    const folder = this.mediaFolder({ kind, sourcePath: '' })
+    const encodedName = encodeArchiveFileName(displayName)
+    const entry = entries.find((item) => item.path === `${folder}/${encodedName}` || item.path === `${folder}/${displayName}`)
+
+    if (!entry) {
+      return undefined
+    }
+
+    const outputDirectory = path.join(extractDirectory, folder)
+    const outputPath = path.join(outputDirectory, sanitizeFileName(displayName))
+
+    await fs.mkdir(outputDirectory, { recursive: true })
+    await fs.writeFile(outputPath, entry.data)
+
+    return {
+      kind,
+      sourcePath: outputPath,
+      fileName: displayName,
+      placement: placement === 'screen' ? 'screen' : placement === 'background' ? 'background' : undefined
+    }
+  }
+
   private mediaFolder(asset: SiqMediaAsset): string {
     if (asset.kind === 'audio') {
       return 'Audio'
@@ -278,6 +442,24 @@ function encodeArchiveFileName(value: string): string {
   return encodeURIComponent(value).replace(/%2F/gi, '_')
 }
 
+function firstMatch(value: string, pattern: RegExp): string {
+  return value.match(pattern)?.[1] ?? ''
+}
+
+function getAttribute(value: string, name: string): string | undefined {
+  const match = value.match(new RegExp(`${name}="([^"]*)"`, 'i')) ?? value.match(new RegExp(`${name}='([^']*)'`, 'i'))
+  return match?.[1]
+}
+
+function readComments(value: string): string | undefined {
+  const comments = unescapeXml(firstMatch(value, /<comments>([\s\S]*?)<\/comments>/i)).trim()
+  return comments || undefined
+}
+
+function isSupportedMediaKind(value: string): value is SiqMediaKind {
+  return value === 'audio' || value === 'video' || value === 'image' || value === 'html'
+}
+
 function escapeXml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -285,4 +467,13 @@ function escapeXml(value: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;')
+}
+
+function unescapeXml(value: string): string {
+  return value
+    .replace(/&apos;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&gt;/g, '>')
+    .replace(/&lt;/g, '<')
+    .replace(/&amp;/g, '&')
 }

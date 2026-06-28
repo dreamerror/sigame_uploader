@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises'
+import { inflateRawSync } from 'node:zlib'
 
 interface ZipEntry {
   path: string
@@ -29,9 +30,76 @@ for (let index = 0; index < CRC_TABLE.length; index += 1) {
 }
 
 export class ZipArchiveService {
+  async readArchive(inputPath: string): Promise<ZipEntry[]> {
+    const archive = await fs.readFile(inputPath)
+    return this.readEntries(archive)
+  }
+
   async writeArchive(outputPath: string, entries: ZipEntry[]): Promise<void> {
     const archive = this.createArchive(entries)
     await fs.writeFile(outputPath, archive)
+  }
+
+  private readEntries(archive: Buffer): ZipEntry[] {
+    const endRecordOffset = this.findEndRecordOffset(archive)
+    const entryCount = archive.readUInt16LE(endRecordOffset + 10)
+    const centralOffset = archive.readUInt32LE(endRecordOffset + 16)
+    const result: ZipEntry[] = []
+    let offset = centralOffset
+
+    for (let index = 0; index < entryCount; index += 1) {
+      if (archive.readUInt32LE(offset) !== 0x02014b50) {
+        throw new Error('ZIP central directory повреждён.')
+      }
+
+      const compressionMethod = archive.readUInt16LE(offset + 10)
+      const compressedSize = archive.readUInt32LE(offset + 20)
+      const fileNameLength = archive.readUInt16LE(offset + 28)
+      const extraLength = archive.readUInt16LE(offset + 30)
+      const commentLength = archive.readUInt16LE(offset + 32)
+      const localHeaderOffset = archive.readUInt32LE(offset + 42)
+      const pathBuffer = archive.subarray(offset + 46, offset + 46 + fileNameLength)
+      const entryPath = pathBuffer.toString('utf8')
+      const localFileNameLength = archive.readUInt16LE(localHeaderOffset + 26)
+      const localExtraLength = archive.readUInt16LE(localHeaderOffset + 28)
+      const dataOffset = localHeaderOffset + 30 + localFileNameLength + localExtraLength
+      const compressedData = archive.subarray(dataOffset, dataOffset + compressedSize)
+
+      if (!entryPath.endsWith('/')) {
+        result.push({
+          path: entryPath,
+          data: this.decompressEntry(compressedData, compressionMethod)
+        })
+      }
+
+      offset += 46 + fileNameLength + extraLength + commentLength
+    }
+
+    return result
+  }
+
+  private decompressEntry(data: Buffer, compressionMethod: number): Buffer {
+    if (compressionMethod === 0) {
+      return data
+    }
+
+    if (compressionMethod === 8) {
+      return inflateRawSync(data)
+    }
+
+    throw new Error(`ZIP compression method ${compressionMethod} не поддерживается.`)
+  }
+
+  private findEndRecordOffset(archive: Buffer): number {
+    const minOffset = Math.max(0, archive.length - 0xffff - 22)
+
+    for (let offset = archive.length - 22; offset >= minOffset; offset -= 1) {
+      if (archive.readUInt32LE(offset) === 0x06054b50) {
+        return offset
+      }
+    }
+
+    throw new Error('Не найден конец ZIP-архива.')
   }
 
   private createArchive(entries: ZipEntry[]): Buffer {

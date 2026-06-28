@@ -46,3 +46,12 @@ export interface SiqPackageExportRequest {
 export interface SiqPackageExportResult {
   outputPath: string
 }
+
+export interface SiqPackageImportRequest {
+  filePath: string
+}
+
+export interface SiqPackageImportResult {
+  package: SiqPackageDraft
+  sourcePath: string
+}

@@ -7,6 +7,7 @@ import type {
   CookieCacheRefreshRequest,
   CookieCacheStatus,
   ExportResult,
+  LocalMediaPreviewRequest,
   MediaCutRequest,
   MediaMetadataRequest,
   MediaMetadata,
@@ -26,7 +27,12 @@ import { PreviewService } from './services/PreviewService'
 import { SiqPackageService } from './services/SiqPackageService'
 import { ThumbnailService } from './services/ThumbnailService'
 import { YtDlpService } from './services/YtDlpService'
-import type { SiqPackageExportRequest, SiqPackageExportResult } from '../shared/siq'
+import type {
+  SiqPackageExportRequest,
+  SiqPackageExportResult,
+  SiqPackageImportRequest,
+  SiqPackageImportResult
+} from '../shared/siq'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -38,7 +44,7 @@ const exportService = new ExportService(ytDlpService, ffmpegService, mediaProbeS
 const previewProxyService = new PreviewProxyService()
 const previewService = new PreviewService(ytDlpService, previewProxyService)
 const thumbnailService = new ThumbnailService()
-const siqPackageService = new SiqPackageService()
+const siqPackageService = new SiqPackageService(app.getPath('userData'))
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -117,6 +123,13 @@ function registerIpcHandlers(): void {
     })
   )
 
+  ipcMain.handle(IPC_CHANNELS.prepareLocalMediaPreview, (_event, request: LocalMediaPreviewRequest) =>
+    toResult<PreviewResult>(async () => ({
+      sourceUrl: request.filePath,
+      previewUrl: await previewProxyService.registerLocalFile(request.filePath)
+    }))
+  )
+
   ipcMain.handle(IPC_CHANNELS.getCookieCacheStatus, () =>
     toResult<CookieCacheStatus>(() => cookieCacheService.getStatus())
   )
@@ -163,6 +176,41 @@ function registerIpcHandlers(): void {
     })
   )
 
+  ipcMain.handle(IPC_CHANNELS.selectSiqPackage, () =>
+    toResult<string>(async () => {
+      const result = await dialog.showOpenDialog({
+        title: 'Выберите пакет SiGame',
+        filters: [{ name: 'SiGame package', extensions: ['siq'] }],
+        properties: ['openFile']
+      })
+
+      if (result.canceled || !result.filePaths[0]) {
+        throw new AppError('folder-selection-cancelled', 'Выбор .siq пакета отменён.')
+      }
+
+      return result.filePaths[0]
+    })
+  )
+
+  ipcMain.handle(IPC_CHANNELS.selectMediaFile, () =>
+    toResult<string>(async () => {
+      const result = await dialog.showOpenDialog({
+        title: 'Выберите медиафайл для вопроса',
+        filters: [
+          { name: 'Media', extensions: ['mp3', 'wav', 'ogg', 'm4a', 'mp4', 'webm', 'mov', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'html', 'htm'] },
+          { name: 'All files', extensions: ['*'] }
+        ],
+        properties: ['openFile']
+      })
+
+      if (result.canceled || !result.filePaths[0]) {
+        throw new AppError('folder-selection-cancelled', 'Выбор медиафайла отменён.')
+      }
+
+      return result.filePaths[0]
+    })
+  )
+
   ipcMain.handle(IPC_CHANNELS.exportClip, (_event, request: MediaCutRequest) =>
     toResult<ExportResult>(async () => {
       await ensureCookieCacheDirectory(request.auth)
@@ -172,6 +220,10 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.downloadThumbnail, (_event, request: ThumbnailDownloadRequest) =>
     toResult<ThumbnailDownloadResult>(() => thumbnailService.downloadThumbnail(request))
+  )
+
+  ipcMain.handle(IPC_CHANNELS.importSiqPackage, (_event, request: SiqPackageImportRequest) =>
+    toResult<SiqPackageImportResult>(() => siqPackageService.importPackage(request))
   )
 
   ipcMain.handle(IPC_CHANNELS.createSiqPackage, (_event, request: SiqPackageExportRequest) =>

@@ -1,4 +1,9 @@
-import type { SiqPackageExportRequest, SiqPackageExportResult } from './siq'
+import type {
+  SiqPackageExportRequest,
+  SiqPackageExportResult,
+  SiqPackageImportRequest,
+  SiqPackageImportResult
+} from './siq'
 
 export interface MediaMetadata {
   sourceUrl: string
@@ -23,6 +28,10 @@ export interface MediaMetadataRequest {
 export interface PreviewRequest {
   url: string
   auth?: YtDlpAuthSettings
+}
+
+export interface LocalMediaPreviewRequest {
+  filePath: string
 }
 
 export interface MediaCutRequest {
@@ -99,12 +108,16 @@ export interface SigameApi {
   checkTools(): Promise<ApiResult<ToolStatus>>
   fetchMetadata(request: MediaMetadataRequest): Promise<ApiResult<MediaMetadata>>
   preparePreview(request: PreviewRequest): Promise<ApiResult<PreviewResult>>
+  prepareLocalMediaPreview(request: LocalMediaPreviewRequest): Promise<ApiResult<PreviewResult>>
   getCookieCacheStatus(): Promise<ApiResult<CookieCacheStatus>>
   refreshCookieCache(request: CookieCacheRefreshRequest): Promise<ApiResult<CookieCacheStatus>>
   clearCookieCache(): Promise<ApiResult<CookieCacheStatus>>
   selectOutputFolder(): Promise<ApiResult<string>>
+  selectSiqPackage(): Promise<ApiResult<string>>
+  selectMediaFile(): Promise<ApiResult<string>>
   exportClip(request: MediaCutRequest): Promise<ApiResult<ExportResult>>
   downloadThumbnail(request: ThumbnailDownloadRequest): Promise<ApiResult<ThumbnailDownloadResult>>
+  importSiqPackage(request: SiqPackageImportRequest): Promise<ApiResult<SiqPackageImportResult>>
   createSiqPackage(request: SiqPackageExportRequest): Promise<ApiResult<SiqPackageExportResult>>
   openYouTubeSignIn(): Promise<ApiResult<void>>
 }

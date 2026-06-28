@@ -1,11 +1,21 @@
 import { randomUUID } from 'node:crypto'
+import fs from 'node:fs'
+import fsp from 'node:fs/promises'
 import http, { type IncomingMessage, type OutgoingHttpHeaders, type ServerResponse } from 'node:http'
 import https from 'node:https'
+import path from 'node:path'
 
-interface PreviewProxyTarget {
-  mediaUrl: string
-  httpHeaders: Record<string, string>
-}
+type PreviewProxyTarget =
+  | {
+      type: 'remote'
+      mediaUrl: string
+      httpHeaders: Record<string, string>
+    }
+  | {
+      type: 'local'
+      filePath: string
+      contentType: string
+    }
 
 const PROXY_HOST = '127.0.0.1'
 const HOP_BY_HOP_HEADERS = new Set([
@@ -26,7 +36,28 @@ export class PreviewProxyService {
   private server?: http.Server
   private port?: number
 
-  async registerTarget(target: PreviewProxyTarget): Promise<string> {
+  async registerTarget(target: Omit<Extract<PreviewProxyTarget, { type: 'remote' }>, 'type'>): Promise<string> {
+    return this.registerProxyTarget({
+      type: 'remote',
+      ...target
+    })
+  }
+
+  async registerLocalFile(filePath: string): Promise<string> {
+    const stats = await fsp.stat(filePath)
+
+    if (!stats.isFile()) {
+      throw new Error('Preview media path is not a file.')
+    }
+
+    return this.registerProxyTarget({
+      type: 'local',
+      filePath,
+      contentType: contentTypeForFile(filePath)
+    })
+  }
+
+  private async registerProxyTarget(target: PreviewProxyTarget): Promise<string> {
     await this.ensureServer()
 
     const id = randomUUID()
@@ -93,6 +124,11 @@ export class PreviewProxyService {
       return
     }
 
+    if (target.type === 'local') {
+      this.streamLocalFile(request, response, target)
+      return
+    }
+
     this.proxyRequest(request, response, target)
   }
 
@@ -112,6 +148,10 @@ export class PreviewProxyService {
   }
 
   private proxyRequest(request: IncomingMessage, response: ServerResponse, target: PreviewProxyTarget): void {
+    if (target.type !== 'remote') {
+      return
+    }
+
     const upstreamUrl = new URL(target.mediaUrl)
     const client = upstreamUrl.protocol === 'https:' ? https : http
     const upstreamRequest = client.request(
@@ -158,9 +198,59 @@ export class PreviewProxyService {
     upstreamRequest.end()
   }
 
+  private streamLocalFile(
+    request: IncomingMessage,
+    response: ServerResponse,
+    target: Extract<PreviewProxyTarget, { type: 'local' }>
+  ): void {
+    fs.stat(target.filePath, (error, stats) => {
+      if (error || !stats.isFile()) {
+        response.writeHead(404)
+        response.end('Local preview file not found')
+        return
+      }
+
+      const range = request.headers.range
+      const headers: OutgoingHttpHeaders = {
+        'Accept-Ranges': 'bytes',
+        'Content-Type': target.contentType
+      }
+
+      if (!range) {
+        headers['Content-Length'] = stats.size
+        response.writeHead(200, headers)
+
+        if (request.method === 'HEAD') {
+          response.end()
+          return
+        }
+
+        fs.createReadStream(target.filePath).pipe(response)
+        return
+      }
+
+      const match = range.match(/bytes=(\d*)-(\d*)/)
+      const start = match?.[1] ? Number(match[1]) : 0
+      const end = match?.[2] ? Number(match[2]) : stats.size - 1
+      const safeStart = Math.min(Math.max(start, 0), stats.size - 1)
+      const safeEnd = Math.min(Math.max(end, safeStart), stats.size - 1)
+
+      headers['Content-Length'] = safeEnd - safeStart + 1
+      headers['Content-Range'] = `bytes ${safeStart}-${safeEnd}/${stats.size}`
+      response.writeHead(206, headers)
+
+      if (request.method === 'HEAD') {
+        response.end()
+        return
+      }
+
+      fs.createReadStream(target.filePath, { start: safeStart, end: safeEnd }).pipe(response)
+    })
+  }
+
   private buildUpstreamHeaders(
     request: IncomingMessage,
-    target: PreviewProxyTarget,
+    target: Extract<PreviewProxyTarget, { type: 'remote' }>,
     upstreamUrl: URL
   ): OutgoingHttpHeaders {
     const headers: OutgoingHttpHeaders = {}
@@ -176,7 +266,7 @@ export class PreviewProxyService {
     for (const name of ['range', 'if-range', 'accept', 'accept-language', 'cache-control', 'pragma']) {
       const value = request.headers[name]
 
-      if (value) {
+      if (typeof value === 'string' || Array.isArray(value)) {
         headers[name] = value
       }
     }
@@ -185,4 +275,23 @@ export class PreviewProxyService {
 
     return headers
   }
+}
+
+function contentTypeForFile(filePath: string): string {
+  const extension = path.extname(filePath).toLowerCase()
+
+  if (extension === '.mp3') return 'audio/mpeg'
+  if (extension === '.wav') return 'audio/wav'
+  if (extension === '.ogg') return 'audio/ogg'
+  if (extension === '.m4a') return 'audio/mp4'
+  if (extension === '.mp4') return 'video/mp4'
+  if (extension === '.webm') return 'video/webm'
+  if (extension === '.mov') return 'video/quicktime'
+  if (extension === '.png') return 'image/png'
+  if (extension === '.jpg' || extension === '.jpeg') return 'image/jpeg'
+  if (extension === '.webp') return 'image/webp'
+  if (extension === '.gif') return 'image/gif'
+  if (extension === '.html' || extension === '.htm') return 'text/html'
+
+  return 'application/octet-stream'
 }

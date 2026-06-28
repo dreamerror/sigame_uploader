@@ -11,10 +11,12 @@ import type {
   YtDlpAuthSettings
 } from '../../shared/types'
 import type { SiqMediaKind } from '../../shared/siq'
+import PackageEditor from './components/PackageEditor.vue'
 import SeekTimeline from './components/SeekTimeline.vue'
 import TimelineSelector from './components/TimelineSelector.vue'
 
 type ExportFormat = 'mp3' | 'mp4'
+type WorkspaceTab = 'media' | 'package'
 const videoQualityOptions: Array<{ value: VideoQuality; label: string }> = [
   { value: '360p', label: '360p' },
   { value: '480p', label: '480p' },
@@ -37,6 +39,7 @@ const AUTH_BROWSER_STORAGE_KEY = 'sigame.auth.cookies.browser'
 const COOKIE_CACHE_ENABLED_STORAGE_KEY = 'sigame.auth.cookies.cache.enabled'
 
 const url = ref('')
+const activeWorkspace = ref<WorkspaceTab>('media')
 const startTimestamp = ref('')
 const endTimestamp = ref('')
 const outputDirectory = ref('')
@@ -1090,7 +1093,16 @@ function clamp(value: number, min: number, max: number): number {
           <span>Dark Precision Utility</span>
         </div>
 
-        <form class="source-form" @submit.prevent="fetchMetadata">
+        <nav class="workspace-tabs" aria-label="Разделы приложения">
+          <button type="button" :class="{ active: activeWorkspace === 'media' }" @click="activeWorkspace = 'media'">
+            Медиа
+          </button>
+          <button type="button" :class="{ active: activeWorkspace === 'package' }" @click="activeWorkspace = 'package'">
+            Пакет
+          </button>
+        </nav>
+
+        <form v-if="activeWorkspace === 'media'" class="source-form" @submit.prevent="fetchMetadata">
           <label class="sr-only" for="url">Ссылка YouTube</label>
           <input
             id="url"
@@ -1104,6 +1116,9 @@ function clamp(value: number, min: number, max: number): number {
             {{ isLoadingMetadata ? 'Получаю...' : 'Получить данные' }}
           </button>
         </form>
+        <div v-else class="package-tab-hint">
+          Создавайте структуру пакета и добавляйте медиа из последнего экспорта.
+        </div>
 
         <div class="command-status">
           <span v-if="isBusy" class="operation-pill">
@@ -1116,7 +1131,7 @@ function clamp(value: number, min: number, max: number): number {
         </div>
       </header>
 
-      <section class="workbench">
+      <section v-show="activeWorkspace === 'media'" class="workbench">
         <section class="media-workspace">
           <section class="workspace-panel player-panel">
             <div class="panel-header">
@@ -1508,6 +1523,12 @@ function clamp(value: number, min: number, max: number): number {
           </details>
         </aside>
       </section>
+
+      <PackageEditor
+        v-show="activeWorkspace === 'package'"
+        :last-export-path="lastOutputPath"
+        @open-media-editor="activeWorkspace = 'media'"
+      />
 
       <footer class="status-bar" :class="[statusKind, { busy: isBusy }]" role="status" aria-live="polite">
         <div class="status-main">
