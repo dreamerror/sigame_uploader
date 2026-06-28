@@ -1132,3 +1132,44 @@ npm run package
 - Fullscreen использует стандартный browser fullscreen API; поведение может немного отличаться между dev и packaged Electron.
 - Нет отдельной кнопки mute.
 - Waveform не добавлялся.
+
+## 2026-06-28: Основа для SiGame/SiQuester интеграции
+
+### Что изменено
+
+- Добавлен документ `SIQ_INTEGRATION_NOTES.md` с первичными заметками по формату `.siq`, структуре архива и плану первого slice.
+- Зафиксированы ориентиры в репозитории `VladimirKhil/SI`:
+  - `src/Common/SIPackages` для модели и сохранения пакетов;
+  - `src/SIQuester` для редакторских workflows;
+  - `assets/siq_5.xsd` как схема формата.
+- Добавлен файл `src/shared/siq.ts` с черновыми TypeScript-типами:
+  - `SiqPackageDraft`;
+  - `SiqRoundDraft`;
+  - `SiqThemeDraft`;
+  - `SiqQuestionDraft`;
+  - `SiqMediaAsset`;
+  - `SiqPackageExportRequest`;
+  - `SiqPackageExportResult`.
+- Обновлён `AGENTS.md`, чтобы будущие агенты не начинали исследование `.siq` с нуля.
+- Генерация `.siq`, IPC, UI и ZIP/XML-сервисы пока не добавлялись.
+- Git-команды, меняющие состояние репозитория, не запускались.
+
+### Как тестировать
+
+```powershell
+npm run typecheck
+npm run build
+```
+
+Ручная проверка:
+
+1. Прочитать `SIQ_INTEGRATION_NOTES.md`.
+2. Убедиться, что первый предлагаемый slice остаётся минимальным: один пакет, один раунд, одна тема, один вопрос, один медиафайл.
+3. Проверить, что текущий media export-flow не затронут.
+
+### Оставшиеся ограничения
+
+- Реальная генерация `.siq` ещё не реализована.
+- Нужно изучить реальный минимальный `.siq`, созданный SiQuester, и подтвердить точную структуру `content.xml`.
+- Нужно выбрать ZIP/XML реализацию для main-process сервиса.
+- Нужно проверить совместимость будущего generated `.siq` в SiQuester.
