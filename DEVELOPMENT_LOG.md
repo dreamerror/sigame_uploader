@@ -322,6 +322,8 @@ npm run build
 npm run package
 ```
 
+В этой итерации `npm run typecheck` и `npm run build` прошли. `npm run package` дважды дошёл до `electron-builder`, но остановился на `EBUSY: resource busy or locked` для `release/win-unpacked/icudtl.dat`; вероятно, собранное приложение или файл из `release/win-unpacked` был открыт/заблокирован внешним процессом.
+
 После запуска desktop-приложения кнопка “Получить” должна обращаться к `window.sigameApi.fetchMetadata`, а не падать с `Cannot read properties of undefined`.
 
 ## 2026-06-25: Реальные пути winget-пакетов для внешних инструментов
@@ -1093,4 +1095,40 @@ npm run package
 
 - Overlay пока не содержит volume/fullscreen controls.
 - Точную визуальную полировку overlay стоит продолжить после проверки в реальном окне приложения.
+- Waveform не добавлялся.
+
+## 2026-06-28: Volume, fullscreen и trim timeline в preview fullscreen
+
+### Что изменено
+
+- В overlay preview-плеера добавлен компактный volume slider.
+- Добавлена кнопка fullscreen для `.player-frame`.
+- В fullscreen видео занимает доступный экран через browser fullscreen API.
+- В fullscreen overlay теперь доступен `TimelineSelector` для выбора start/end без выхода из fullscreen.
+- Fullscreen trim timeline синхронизирован с обычным timeline ниже плеера.
+- Пустые зоны overlay пропускают клики к видео, а интерактивные элементы остаются кликабельными.
+- Preview/export-flow и main-process сервисы не менялись.
+- Git-команды, меняющие состояние репозитория, не запускались.
+
+### Как тестировать
+
+```powershell
+npm run typecheck
+npm run build
+npm run package
+```
+
+Ручная проверка:
+
+1. Получить metadata и дождаться preview.
+2. Проверить play/pause, seek и volume в overlay.
+3. Открыть fullscreen.
+4. Проверить, что в fullscreen доступны seek timeline, transport controls и trim timeline start/end.
+5. Изменить start/end в fullscreen и убедиться, что обычный timeline ниже плеера синхронизирован после выхода.
+6. Проверить preview playback и export на коротком разрешённом фрагменте.
+
+### Оставшиеся ограничения
+
+- Fullscreen использует стандартный browser fullscreen API; поведение может немного отличаться между dev и packaged Electron.
+- Нет отдельной кнопки mute.
 - Waveform не добавлялся.

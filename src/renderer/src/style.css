@@ -362,12 +362,27 @@ h3 {
   background: #07090d;
 }
 
+.player-frame:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  border: 0;
+  border-radius: 0;
+  background: #000;
+}
+
 .media-player {
   display: block;
   width: 100%;
   max-height: calc(100vh - 295px);
   min-height: 260px;
   background: #07090d;
+}
+
+.player-frame:fullscreen .media-player {
+  width: 100vw;
+  height: 100vh;
+  max-height: none;
+  object-fit: contain;
 }
 
 .media-player-placeholder {
@@ -405,6 +420,16 @@ h3 {
   gap: 10px;
   padding: 22px 12px 12px;
   background: linear-gradient(180deg, rgba(7, 9, 13, 0), rgba(7, 9, 13, 0.84) 34%, rgba(7, 9, 13, 0.96));
+  pointer-events: none;
+}
+
+.player-overlay > * {
+  pointer-events: auto;
+}
+
+.player-frame:fullscreen .player-overlay {
+  gap: 12px;
+  padding: 52px 18px 18px;
 }
 
 .player-transport {
@@ -426,6 +451,10 @@ h3 {
   line-height: 1;
 }
 
+.fullscreen-button {
+  margin-left: 0;
+}
+
 .transport-segment-button {
   min-height: 36px;
   border-color: rgba(56, 189, 248, 0.36);
@@ -433,11 +462,55 @@ h3 {
   background: rgba(17, 20, 26, 0.9);
 }
 
+.volume-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  border: 1px solid rgba(56, 189, 248, 0.24);
+  border-radius: var(--radius);
+  padding: 0 9px;
+  color: var(--text-soft);
+  background: rgba(17, 20, 26, 0.86);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.volume-control input {
+  width: 92px;
+  min-width: 92px;
+  accent-color: var(--accent);
+}
+
 .transport-time {
   margin-left: auto;
   color: var(--text-soft);
   font-family: var(--font-mono);
   font-size: 12px;
+  font-weight: 750;
+}
+
+.fullscreen-trim-panel {
+  display: none;
+}
+
+.player-frame:fullscreen .fullscreen-trim-panel {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  border-radius: var(--radius);
+  padding: 10px;
+  background: rgba(12, 16, 22, 0.86);
+}
+
+.fullscreen-trim-header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-soft);
+  font-family: var(--font-mono);
+  font-size: 11px;
   font-weight: 750;
 }
 

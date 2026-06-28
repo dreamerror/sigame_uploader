@@ -61,8 +61,11 @@ const progressMessage = ref('')
 const elapsedSeconds = ref(0)
 const previewUrl = ref('')
 const previewRenderKey = ref(0)
+const playerFrameRef = ref<HTMLElement | null>(null)
 const playerRef = ref<HTMLVideoElement | null>(null)
 const currentTime = ref(0)
+const playerVolume = ref(1)
+const isPlayerFullscreen = ref(false)
 const isPlayerPlaying = ref(false)
 const isPlayingSelection = ref(false)
 const previewError = ref('')
@@ -171,6 +174,8 @@ const selectionPlayButtonLabel = computed(() => (isPlayingSelection.value ? '■
 const selectionPlayButtonTitle = computed(() => (isPlayingSelection.value ? 'Остановить отрезок' : 'Проиграть выбранный отрезок'))
 const playbackButtonLabel = computed(() => (isPlayerPlaying.value ? '⏸' : '▶'))
 const playbackButtonTitle = computed(() => (isPlayerPlaying.value ? 'Пауза' : 'Воспроизвести'))
+const fullscreenButtonLabel = computed(() => (isPlayerFullscreen.value ? '⤢' : '⛶'))
+const fullscreenButtonTitle = computed(() => (isPlayerFullscreen.value ? 'Выйти из fullscreen' : 'Открыть fullscreen'))
 
 const outputFileName = computed(() => {
   if (!metadata.value) {
@@ -219,6 +224,7 @@ const toolWarning = computed(() => {
 })
 
 onMounted(async () => {
+  document.addEventListener('fullscreenchange', updateFullscreenState)
   restoreAuthSettings()
   const api = getApi()
 
@@ -238,6 +244,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  document.removeEventListener('fullscreenchange', updateFullscreenState)
   stopProgress()
   clearAutoPreviewRetry()
   clearPlaybackFeedback()
@@ -390,6 +397,7 @@ function onPlayerTimeUpdate(): void {
 
 function onPlayerLoadedMetadata(): void {
   if (playerRef.value) {
+    playerRef.value.volume = playerVolume.value
     currentTime.value = roundToMilliseconds(playerRef.value.currentTime)
   }
 
@@ -436,6 +444,36 @@ function seekPlayer(value: number): void {
   if (playerRef.value) {
     playerRef.value.currentTime = rounded
   }
+}
+
+function setPlayerVolume(value: number): void {
+  playerVolume.value = clamp(value, 0, 1)
+
+  if (playerRef.value) {
+    playerRef.value.volume = playerVolume.value
+  }
+}
+
+async function toggleFullscreen(): Promise<void> {
+  if (!document.fullscreenEnabled) {
+    showUnexpectedError('Fullscreen недоступен в текущем окружении.', 'Не удалось открыть fullscreen.')
+    return
+  }
+
+  try {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen()
+      return
+    }
+
+    await playerFrameRef.value?.requestFullscreen()
+  } catch (error) {
+    showUnexpectedError(error, 'Не удалось переключить fullscreen.')
+  }
+}
+
+function updateFullscreenState(): void {
+  isPlayerFullscreen.value = document.fullscreenElement === playerFrameRef.value
 }
 
 async function togglePlayback(): Promise<void> {
@@ -975,7 +1013,7 @@ function clamp(value: number, min: number, max: number): number {
               </div>
             </div>
 
-            <div class="player-frame">
+            <div ref="playerFrameRef" class="player-frame" :class="{ fullscreen: isPlayerFullscreen }">
               <template v-if="previewUrl">
                 <video
                   ref="playerRef"
@@ -1029,7 +1067,44 @@ function clamp(value: number, min: number, max: number): number {
                     >
                       {{ selectionPlayButtonLabel }}
                     </button>
+                    <label class="volume-control" @click.stop>
+                      <span>Громкость</span>
+                      <input
+                        v-model.number="playerVolume"
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.01"
+                        :aria-valuetext="`${Math.round(playerVolume * 100)}%`"
+                        @input="setPlayerVolume(playerVolume)"
+                      />
+                    </label>
                     <span class="transport-time">{{ formatTimestamp(currentTime) }} / {{ durationLabel }}</span>
+                    <button
+                      class="transport-icon-button fullscreen-button"
+                      type="button"
+                      :aria-label="fullscreenButtonTitle"
+                      :title="fullscreenButtonTitle"
+                      @click.stop="toggleFullscreen"
+                    >
+                      {{ fullscreenButtonLabel }}
+                    </button>
+                  </div>
+
+                  <div v-if="isPlayerFullscreen && durationSeconds > 0" class="fullscreen-trim-panel">
+                    <div class="fullscreen-trim-header">
+                      <span>Отрезок {{ selectedDurationLabel }}</span>
+                      <span>{{ startSeconds !== undefined ? formatTimestamp(startSeconds) : '—' }} → {{ endSeconds !== undefined ? formatTimestamp(endSeconds) : '—' }}</span>
+                    </div>
+                    <TimelineSelector
+                      :duration="durationSeconds"
+                      :current-time="currentTime"
+                      :start="startSeconds ?? 0"
+                      :end="endSeconds ?? Math.min(durationSeconds, MIN_FRAGMENT_SECONDS)"
+                      :disabled="!canUseSelectionControls"
+                      @update:start="setStartSeconds"
+                      @update:end="setEndSeconds"
+                    />
                   </div>
                 </div>
               </template>
