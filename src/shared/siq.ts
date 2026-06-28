@@ -1,5 +1,18 @@
 export type SiqMediaKind = 'audio' | 'video' | 'image' | 'html'
 export type SiqMediaPlacement = 'background' | 'screen'
+export type SiqQuestionType =
+  | ''
+  | 'simple'
+  | 'withButton'
+  | 'stake'
+  | 'stakeAll'
+  | 'secret'
+  | 'secretPublicPrice'
+  | 'secretNoQuestion'
+  | 'noRisk'
+  | 'forYourself'
+  | 'forAll'
+export type SiqAnswerType = 'text' | 'number' | 'point' | 'select' | 'client'
 
 export interface SiqMediaAsset {
   kind: SiqMediaKind
@@ -12,6 +25,12 @@ export interface SiqQuestionDraft {
   price: number
   text: string
   answer: string
+  type?: SiqQuestionType
+  answerType?: SiqAnswerType
+  answerOptions?: string[]
+  answerDeviation?: string
+  acceptedAnswers?: string[]
+  wrongAnswers?: string[]
   comments?: string
   media?: SiqMediaAsset
 }

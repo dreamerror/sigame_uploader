@@ -14,6 +14,27 @@ const emit = defineEmits<{
 type StatusKind = 'idle' | 'success' | 'error'
 type EditorSection = 'package' | 'round' | 'theme' | 'question' | 'media'
 
+const questionTypeOptions = [
+  { value: '', label: 'По умолчанию' },
+  { value: 'simple', label: 'Обычный' },
+  { value: 'withButton', label: 'С кнопкой' },
+  { value: 'stake', label: 'Со ставкой' },
+  { value: 'stakeAll', label: 'Ставка для всех' },
+  { value: 'secret', label: 'Секрет' },
+  { value: 'secretPublicPrice', label: 'Секрет с открытой ценой' },
+  { value: 'secretNoQuestion', label: 'Секрет без вопроса' },
+  { value: 'noRisk', label: 'Без риска' },
+  { value: 'forYourself', label: 'Для себя' },
+  { value: 'forAll', label: 'Для всех' }
+] as const
+const answerTypeOptions = [
+  { value: 'text', label: 'Текст' },
+  { value: 'number', label: 'Число' },
+  { value: 'point', label: 'Точка' },
+  { value: 'select', label: 'Выбор варианта' },
+  { value: 'client', label: 'Клиентский ввод' }
+] as const
+
 const packageDraft = ref<SiqPackageDraft>(createEmptyPackage())
 const outputDirectory = ref('')
 const outputFileName = ref('')
@@ -24,6 +45,7 @@ const selectedThemeIndex = ref(0)
 const selectedQuestionIndex = ref(0)
 const collapsedRounds = ref<Set<string>>(new Set())
 const collapsedThemes = ref<Set<string>>(new Set())
+const collapsedQuestions = ref<Set<string>>(new Set())
 const collapsedEditorSections = ref<Set<EditorSection>>(new Set())
 const isBusy = ref(false)
 const statusKind = ref<StatusKind>('idle')
@@ -39,13 +61,7 @@ const currentQuestionMedia = computed(() => currentQuestion.value?.media)
 const canSave = computed(() => Boolean(outputDirectory.value.trim()) && Boolean(packageDraft.value.title.trim()) && !isBusy.value)
 const lastExportMediaKind = computed<SiqMediaKind | undefined>(() => mediaKindFromPath(props.lastExportPath))
 const mediaPreviewKind = computed(() => currentQuestionMedia.value?.kind)
-const selectedMediaLabel = computed(() => {
-  if (!currentQuestion.value?.media) {
-    return 'Медиа не выбрано'
-  }
-
-  return currentQuestion.value.media.fileName || currentQuestion.value.media.sourcePath
-})
+collapseAllStructure()
 
 function createEmptyPackage(): SiqPackageDraft {
   return {
@@ -74,6 +90,8 @@ function createTheme(name: string): SiqThemeDraft {
 function createQuestion(price: number): SiqQuestionDraft {
   return {
     price,
+    type: '',
+    answerType: 'text',
     text: 'Текст вопроса',
     answer: ''
   }
@@ -84,8 +102,7 @@ function newPackage(): void {
   outputFileName.value = ''
   loadedSourcePath.value = ''
   savedOutputPath.value = ''
-  collapsedRounds.value = new Set()
-  collapsedThemes.value = new Set()
+  collapseAllStructure()
   collapsedEditorSections.value = new Set()
   selectItem(0, 0, 0)
   showStatus('idle', 'Создан новый черновик пакета.')
@@ -123,8 +140,7 @@ async function openPackage(): Promise<void> {
     outputDirectory.value = directoryName(imported.data.sourcePath)
     outputFileName.value = fileBaseName(imported.data.sourcePath)
     savedOutputPath.value = ''
-    collapsedRounds.value = new Set()
-    collapsedThemes.value = new Set()
+    collapseAllStructure()
     collapsedEditorSections.value = new Set()
     selectItem(0, 0, 0)
     showStatus('success', `Пакет открыт: ${imported.data.sourcePath}`)
@@ -187,57 +203,70 @@ async function savePackage(): Promise<void> {
 
 function addRound(): void {
   packageDraft.value.rounds.push(createRound(String(packageDraft.value.rounds.length + 1)))
+  collapseAllStructure()
   selectItem(packageDraft.value.rounds.length - 1, 0, 0)
 }
 
 function addFinalRound(): void {
   packageDraft.value.rounds.push(createRound('Финал', 'final'))
+  collapseAllStructure()
   selectItem(packageDraft.value.rounds.length - 1, 0, 0)
 }
 
-function removeCurrentRound(): void {
+function removeRound(roundIndex: number): void {
   if (packageDraft.value.rounds.length <= 1) {
     return
   }
 
-  packageDraft.value.rounds.splice(selectedRoundIndex.value, 1)
-  selectItem(Math.max(0, selectedRoundIndex.value - 1), 0, 0)
+  packageDraft.value.rounds.splice(roundIndex, 1)
+  collapseAllStructure()
+  selectItem(Math.max(0, roundIndex - 1), 0, 0)
 }
 
-function addTheme(): void {
-  if (!currentRound.value) {
+function addThemeToRound(roundIndex: number): void {
+  const round = packageDraft.value.rounds[roundIndex]
+
+  if (!round) {
     return
   }
 
-  currentRound.value.themes.push(createTheme('Новая тема'))
-  selectItem(selectedRoundIndex.value, currentRound.value.themes.length - 1, 0)
+  round.themes.push(createTheme('Новая тема'))
+  collapseAllStructure()
+  selectItem(roundIndex, round.themes.length - 1, 0)
 }
 
-function removeCurrentTheme(): void {
-  if (!currentRound.value || currentRound.value.themes.length <= 1) {
+function removeTheme(roundIndex: number, themeIndex: number): void {
+  const round = packageDraft.value.rounds[roundIndex]
+
+  if (!round || round.themes.length <= 1) {
     return
   }
 
-  currentRound.value.themes.splice(selectedThemeIndex.value, 1)
-  selectItem(selectedRoundIndex.value, Math.max(0, selectedThemeIndex.value - 1), 0)
+  round.themes.splice(themeIndex, 1)
+  selectItem(roundIndex, Math.max(0, themeIndex - 1), 0)
 }
 
-function addQuestion(): void {
-  if (!currentTheme.value) {
+function addQuestionToTheme(roundIndex: number, themeIndex: number): void {
+  const theme = packageDraft.value.rounds[roundIndex]?.themes[themeIndex]
+
+  if (!theme) {
     return
   }
 
-  currentTheme.value.questions.push(createQuestion((currentTheme.value.questions.length + 1) * 100))
-  selectItem(selectedRoundIndex.value, selectedThemeIndex.value, currentTheme.value.questions.length - 1)
+  theme.questions.push(createQuestion((theme.questions.length + 1) * 100))
+  collapseAllStructure()
+  selectItem(roundIndex, themeIndex, theme.questions.length - 1)
 }
 
-function removeCurrentQuestion(): void {
-  if (!currentTheme.value || currentTheme.value.questions.length <= 1) {
+function removeQuestion(roundIndex: number, themeIndex: number, questionIndex: number): void {
+  const theme = packageDraft.value.rounds[roundIndex]?.themes[themeIndex]
+
+  if (!theme || theme.questions.length <= 1) {
     return
   }
 
-  currentTheme.value.questions.splice(selectedQuestionIndex.value, 1)
-  selectItem(selectedRoundIndex.value, selectedThemeIndex.value, Math.max(0, selectedQuestionIndex.value - 1))
+  theme.questions.splice(questionIndex, 1)
+  selectItem(roundIndex, themeIndex, Math.max(0, questionIndex - 1))
 }
 
 function selectItem(roundIndex: number, themeIndex: number, questionIndex: number): void {
@@ -313,12 +342,20 @@ function toggleTheme(roundIndex: number, themeIndex: number): void {
   toggleSetValue(collapsedThemes.value, `t:${roundIndex}:${themeIndex}`)
 }
 
+function toggleQuestion(roundIndex: number, themeIndex: number, questionIndex: number): void {
+  toggleSetValue(collapsedQuestions.value, `q:${roundIndex}:${themeIndex}:${questionIndex}`)
+}
+
 function isRoundCollapsed(roundIndex: number): boolean {
   return collapsedRounds.value.has(`r:${roundIndex}`)
 }
 
 function isThemeCollapsed(roundIndex: number, themeIndex: number): boolean {
   return collapsedThemes.value.has(`t:${roundIndex}:${themeIndex}`)
+}
+
+function isQuestionCollapsed(roundIndex: number, themeIndex: number, questionIndex: number): boolean {
+  return collapsedQuestions.value.has(`q:${roundIndex}:${themeIndex}:${questionIndex}`)
 }
 
 function toggleEditorSection(section: EditorSection): void {
@@ -374,9 +411,31 @@ function toggleSetValue(values: Set<string>, value: string): void {
 
   if (value.startsWith('r:')) {
     collapsedRounds.value = nextValues
-  } else {
+  } else if (value.startsWith('t:')) {
     collapsedThemes.value = nextValues
+  } else {
+    collapsedQuestions.value = nextValues
   }
+}
+
+function collapseAllStructure(): void {
+  const roundKeys = new Set<string>()
+  const themeKeys = new Set<string>()
+  const questionKeys = new Set<string>()
+
+  packageDraft.value.rounds.forEach((round, roundIndex) => {
+    roundKeys.add(`r:${roundIndex}`)
+    round.themes.forEach((theme, themeIndex) => {
+      themeKeys.add(`t:${roundIndex}:${themeIndex}`)
+      theme.questions.forEach((_question, questionIndex) => {
+        questionKeys.add(`q:${roundIndex}:${themeIndex}:${questionIndex}`)
+      })
+    })
+  })
+
+  collapsedRounds.value = roundKeys
+  collapsedThemes.value = themeKeys
+  collapsedQuestions.value = questionKeys
 }
 
 function mediaKindFromPath(value: string): SiqMediaKind | undefined {
@@ -450,6 +509,18 @@ function fileName(value: string): string {
 
 function fileBaseName(value: string): string {
   return fileName(value).replace(/\.siq$/i, '')
+}
+
+function formatList(value: string[] | undefined): string {
+  return (value ?? []).join('\n')
+}
+
+function parseList(value: string): string[] {
+  return value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)
+}
+
+function eventValue(event: Event): string {
+  return event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLInputElement ? event.target.value : ''
 }
 </script>
 
@@ -587,158 +658,242 @@ function fileBaseName(value: string): string {
           </template>
         </section>
 
-        <section v-if="currentRound" class="workspace-panel package-section">
+        <section
+          v-for="(round, roundIndex) in packageDraft.rounds"
+          :key="roundIndex"
+          class="workspace-panel package-section document-round"
+          :class="{ selected: selectedRoundIndex === roundIndex }"
+        >
           <div class="panel-header compact">
             <div class="panel-title-row">
-              <span class="section-kicker">Round</span>
-              <h2>Раунд</h2>
+              <span class="section-kicker">{{ round.type === 'final' ? 'Final round' : 'Round' }}</span>
+              <h2>{{ round.name || 'Раунд без названия' }}</h2>
             </div>
             <div class="header-actions">
-              <button type="button" :disabled="packageDraft.rounds.length <= 1" @click="removeCurrentRound">Удалить</button>
-              <button
-                type="button"
-                class="section-collapse-button"
-                :aria-expanded="!isEditorSectionCollapsed('round')"
-                @click="toggleEditorSection('round')"
-              >
-                {{ isEditorSectionCollapsed('round') ? '›' : '⌄' }}
+              <button type="button" @click="addThemeToRound(roundIndex)">+ Тема</button>
+              <button type="button" :disabled="packageDraft.rounds.length <= 1" @click="removeRound(roundIndex)">Удалить</button>
+              <button type="button" class="section-collapse-button" :aria-expanded="!isRoundCollapsed(roundIndex)" @click="toggleRound(roundIndex)">
+                {{ isRoundCollapsed(roundIndex) ? '›' : '⌄' }}
               </button>
             </div>
           </div>
 
-          <div v-if="!isEditorSectionCollapsed('round')" class="editor-grid">
-            <label>
-              <span>Название</span>
-              <input v-model="currentRound.name" autocomplete="off" />
-            </label>
-            <label>
-              <span>Тип</span>
-              <select v-model="currentRound.type">
-                <option value="standard">Обычный</option>
-                <option value="final">Финальный</option>
-              </select>
-            </label>
-          </div>
-        </section>
-
-        <section v-if="currentTheme" class="workspace-panel package-section">
-          <div class="panel-header compact">
-            <div class="panel-title-row">
-              <span class="section-kicker">Theme</span>
-              <h2>Тема</h2>
-            </div>
-            <div class="header-actions">
-              <button type="button" @click="addTheme">+ Тема</button>
-              <button type="button" :disabled="(currentRound?.themes.length ?? 0) <= 1" @click="removeCurrentTheme">Удалить</button>
-              <button
-                type="button"
-                class="section-collapse-button"
-                :aria-expanded="!isEditorSectionCollapsed('theme')"
-                @click="toggleEditorSection('theme')"
-              >
-                {{ isEditorSectionCollapsed('theme') ? '›' : '⌄' }}
-              </button>
-            </div>
-          </div>
-
-          <template v-if="!isEditorSectionCollapsed('theme')">
-            <label>
-              <span>Название</span>
-              <input v-model="currentTheme.name" autocomplete="off" />
-            </label>
-            <label>
-              <span>Комментарий</span>
-              <input v-model="currentTheme.comments" autocomplete="off" />
-            </label>
-          </template>
-        </section>
-
-        <section v-if="currentQuestion" class="workspace-panel package-section">
-          <div class="panel-header compact">
-            <div class="panel-title-row">
-              <span class="section-kicker">Question</span>
-              <h2>Вопрос</h2>
-            </div>
-            <div class="header-actions">
-              <button type="button" @click="addQuestion">+ Вопрос</button>
-              <button type="button" :disabled="(currentTheme?.questions.length ?? 0) <= 1" @click="removeCurrentQuestion">Удалить</button>
-              <button
-                type="button"
-                class="section-collapse-button"
-                :aria-expanded="!isEditorSectionCollapsed('question')"
-                @click="toggleEditorSection('question')"
-              >
-                {{ isEditorSectionCollapsed('question') ? '›' : '⌄' }}
-              </button>
-            </div>
-          </div>
-
-          <template v-if="!isEditorSectionCollapsed('question')">
+          <template v-if="!isRoundCollapsed(roundIndex)">
             <div class="editor-grid">
               <label>
-                <span>Цена</span>
-                <input v-model.number="currentQuestion.price" type="number" min="1" step="100" />
+                <span>Название раунда</span>
+                <input v-model="round.name" autocomplete="off" @focus="selectItem(roundIndex, 0, 0)" />
               </label>
               <label>
-                <span>Ответ</span>
-                <input v-model="currentQuestion.answer" autocomplete="off" />
+                <span>Тип</span>
+                <select v-model="round.type" @focus="selectItem(roundIndex, 0, 0)">
+                  <option value="standard">Обычный</option>
+                  <option value="final">Финальный</option>
+                </select>
               </label>
             </div>
 
-            <label>
-              <span>Текст вопроса</span>
-              <textarea v-model="currentQuestion.text" rows="4"></textarea>
-            </label>
-
-            <label>
-              <span>Комментарий</span>
-              <input v-model="currentQuestion.comments" autocomplete="off" />
-            </label>
-          </template>
-
-          <section class="question-media-section">
-            <div class="panel-header compact">
-              <div class="panel-title-row">
-                <span class="section-kicker">Media</span>
-                <h3>Медиа вопроса</h3>
-              </div>
-              <button
-                type="button"
-                class="section-collapse-button"
-                :aria-expanded="!isEditorSectionCollapsed('media')"
-                @click="toggleEditorSection('media')"
-              >
-                {{ isEditorSectionCollapsed('media') ? '›' : '⌄' }}
-              </button>
-            </div>
-
-            <template v-if="!isEditorSectionCollapsed('media')">
-              <div class="media-picker">
-                <div>
-                  <p class="path-hint" :title="selectedMediaLabel">{{ selectedMediaLabel }}</p>
-                  <p v-if="currentQuestion.media" class="path-hint">
-                    При сохранении `.siq` файл будет встроен в пакет. Исходный файл после проверки можно удалить с диска.
-                  </p>
+            <section
+              v-for="(theme, themeIndex) in round.themes"
+              :key="themeIndex"
+              class="document-theme"
+              :class="{ selected: selectedRoundIndex === roundIndex && selectedThemeIndex === themeIndex }"
+            >
+              <div class="panel-header compact">
+                <div class="panel-title-row">
+                  <span class="section-kicker">Theme</span>
+                  <h3>{{ theme.name || 'Тема без названия' }}</h3>
                 </div>
                 <div class="header-actions">
-                  <button type="button" :disabled="!lastExportMediaKind" @click="useLastExportAsMedia">Последний экспорт</button>
-                  <button type="button" @click="selectMediaFromDisk">Файл с диска</button>
-                  <button type="button" @click="emit('openMediaEditor')">Открыть редактор медиа</button>
-                  <button type="button" :disabled="!currentQuestion.media" @click="clearQuestionMedia">Убрать</button>
+                  <button type="button" @click="addQuestionToTheme(roundIndex, themeIndex)">+ Вопрос</button>
+                  <button type="button" :disabled="round.themes.length <= 1" @click="removeTheme(roundIndex, themeIndex)">Удалить</button>
+                  <button
+                    type="button"
+                    class="section-collapse-button"
+                    :aria-expanded="!isThemeCollapsed(roundIndex, themeIndex)"
+                    @click="toggleTheme(roundIndex, themeIndex)"
+                  >
+                    {{ isThemeCollapsed(roundIndex, themeIndex) ? '›' : '⌄' }}
+                  </button>
                 </div>
               </div>
 
-              <div v-if="currentQuestion.media" class="question-media-preview">
-                <p v-if="mediaPreviewError" class="inline-error">{{ mediaPreviewError }}</p>
-                <template v-else-if="mediaPreviewUrl">
-                  <audio v-if="mediaPreviewKind === 'audio'" :src="mediaPreviewUrl" controls></audio>
-                  <video v-else-if="mediaPreviewKind === 'video'" :src="mediaPreviewUrl" controls></video>
-                  <img v-else-if="mediaPreviewKind === 'image'" :src="mediaPreviewUrl" alt="" />
-                </template>
-                <p v-else class="path-hint">Для этого типа медиа preview пока не отображается, но файл будет встроен в пакет при сохранении.</p>
-              </div>
-            </template>
-          </section>
+              <template v-if="!isThemeCollapsed(roundIndex, themeIndex)">
+                <div class="editor-grid">
+                  <label>
+                    <span>Название темы</span>
+                    <input v-model="theme.name" autocomplete="off" @focus="selectItem(roundIndex, themeIndex, 0)" />
+                  </label>
+                  <label>
+                    <span>Комментарий к теме</span>
+                    <input v-model="theme.comments" autocomplete="off" @focus="selectItem(roundIndex, themeIndex, 0)" />
+                  </label>
+                </div>
+
+                <section
+                  v-for="(question, questionIndex) in theme.questions"
+                  :key="questionIndex"
+                  class="document-question"
+                  :class="{
+                    selected:
+                      selectedRoundIndex === roundIndex &&
+                      selectedThemeIndex === themeIndex &&
+                      selectedQuestionIndex === questionIndex
+                  }"
+                >
+                  <div class="panel-header compact">
+                    <div class="panel-title-row">
+                      <span class="section-kicker">Question</span>
+                      <h3>{{ question.price }}: {{ question.answer || 'Без ответа' }}</h3>
+                    </div>
+                    <div class="header-actions">
+                      <button type="button" :disabled="theme.questions.length <= 1" @click="removeQuestion(roundIndex, themeIndex, questionIndex)">Удалить</button>
+                      <button
+                        type="button"
+                        class="section-collapse-button"
+                        :aria-expanded="!isQuestionCollapsed(roundIndex, themeIndex, questionIndex)"
+                        @click="toggleQuestion(roundIndex, themeIndex, questionIndex)"
+                      >
+                        {{ isQuestionCollapsed(roundIndex, themeIndex, questionIndex) ? '›' : '⌄' }}
+                      </button>
+                    </div>
+                  </div>
+
+                  <template v-if="!isQuestionCollapsed(roundIndex, themeIndex, questionIndex)">
+                    <div class="editor-grid">
+                      <label>
+                        <span>Цена</span>
+                        <input v-model.number="question.price" type="number" min="1" step="100" @focus="selectItem(roundIndex, themeIndex, questionIndex)" />
+                      </label>
+                      <label>
+                        <span>Тип вопроса</span>
+                        <select v-model="question.type" @focus="selectItem(roundIndex, themeIndex, questionIndex)">
+                          <option v-for="option in questionTypeOptions" :key="option.value" :value="option.value">
+                            {{ option.label }}
+                          </option>
+                        </select>
+                      </label>
+                      <label>
+                        <span>Тип ответа</span>
+                        <select v-model="question.answerType" @focus="selectItem(roundIndex, themeIndex, questionIndex)">
+                          <option v-for="option in answerTypeOptions" :key="option.value" :value="option.value">
+                            {{ option.label }}
+                          </option>
+                        </select>
+                      </label>
+                      <label>
+                        <span>Ответ</span>
+                        <input v-model="question.answer" autocomplete="off" @focus="selectItem(roundIndex, themeIndex, questionIndex)" />
+                      </label>
+                      <label>
+                        <span>Допуск ответа</span>
+                        <input v-model="question.answerDeviation" placeholder="Для числа/точки" autocomplete="off" @focus="selectItem(roundIndex, themeIndex, questionIndex)" />
+                      </label>
+                    </div>
+
+                    <label>
+                      <span>Текст вопроса</span>
+                      <textarea v-model="question.text" rows="3" @focus="selectItem(roundIndex, themeIndex, questionIndex)"></textarea>
+                    </label>
+
+                    <label>
+                      <span>Комментарий</span>
+                      <input v-model="question.comments" autocomplete="off" @focus="selectItem(roundIndex, themeIndex, questionIndex)" />
+                    </label>
+
+                    <div class="editor-grid answer-lists-grid">
+                      <label>
+                        <span>Дополнительные зачёты</span>
+                        <textarea
+                          :value="formatList(question.acceptedAnswers)"
+                          rows="3"
+                          placeholder="Один вариант на строку"
+                          @focus="selectItem(roundIndex, themeIndex, questionIndex)"
+                          @input="question.acceptedAnswers = parseList(eventValue($event))"
+                        ></textarea>
+                      </label>
+                      <label>
+                        <span>Незачётные варианты</span>
+                        <textarea
+                          :value="formatList(question.wrongAnswers)"
+                          rows="3"
+                          placeholder="Один вариант на строку"
+                          @focus="selectItem(roundIndex, themeIndex, questionIndex)"
+                          @input="question.wrongAnswers = parseList(eventValue($event))"
+                        ></textarea>
+                      </label>
+                      <label>
+                        <span>Варианты выбора</span>
+                        <textarea
+                          :value="formatList(question.answerOptions)"
+                          rows="3"
+                          placeholder="Для типа ответа 'Выбор варианта'"
+                          @focus="selectItem(roundIndex, themeIndex, questionIndex)"
+                          @input="question.answerOptions = parseList(eventValue($event))"
+                        ></textarea>
+                      </label>
+                    </div>
+
+                    <section class="question-media-section">
+                      <div class="panel-header compact">
+                        <div class="panel-title-row">
+                          <span class="section-kicker">Media</span>
+                          <h3>Медиа вопроса</h3>
+                        </div>
+                      </div>
+
+                      <div class="media-picker">
+                        <div>
+                          <p class="path-hint" :title="question.media?.sourcePath || 'Медиа не выбрано'">
+                            {{ question.media?.fileName || question.media?.sourcePath || 'Медиа не выбрано' }}
+                          </p>
+                          <p v-if="question.media" class="path-hint">
+                            При сохранении `.siq` файл будет встроен в пакет. Исходный файл после проверки можно удалить с диска.
+                          </p>
+                        </div>
+                        <div class="header-actions">
+                          <button
+                            type="button"
+                            :disabled="!lastExportMediaKind"
+                            @click="selectItem(roundIndex, themeIndex, questionIndex); useLastExportAsMedia()"
+                          >
+                            Последний экспорт
+                          </button>
+                          <button type="button" @click="selectItem(roundIndex, themeIndex, questionIndex); selectMediaFromDisk()">Файл с диска</button>
+                          <button type="button" @click="emit('openMediaEditor')">Открыть редактор медиа</button>
+                          <button
+                            type="button"
+                            :disabled="!question.media"
+                            @click="selectItem(roundIndex, themeIndex, questionIndex); clearQuestionMedia()"
+                          >
+                            Убрать
+                          </button>
+                        </div>
+                      </div>
+
+                      <div
+                        v-if="
+                          question.media &&
+                          selectedRoundIndex === roundIndex &&
+                          selectedThemeIndex === themeIndex &&
+                          selectedQuestionIndex === questionIndex
+                        "
+                        class="question-media-preview"
+                      >
+                        <p v-if="mediaPreviewError" class="inline-error">{{ mediaPreviewError }}</p>
+                        <template v-else-if="mediaPreviewUrl">
+                          <audio v-if="mediaPreviewKind === 'audio'" :src="mediaPreviewUrl" controls></audio>
+                          <video v-else-if="mediaPreviewKind === 'video'" :src="mediaPreviewUrl" controls></video>
+                          <img v-else-if="mediaPreviewKind === 'image'" :src="mediaPreviewUrl" alt="" />
+                        </template>
+                        <p v-else class="path-hint">Для этого типа медиа preview пока не отображается, но файл будет встроен в пакет при сохранении.</p>
+                      </div>
+                    </section>
+                  </template>
+                </section>
+              </template>
+            </section>
+          </template>
         </section>
       </section>
     </section>

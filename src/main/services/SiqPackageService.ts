@@ -203,13 +203,20 @@ export class SiqPackageService {
             const questionMedia = question.media ? media[mediaIndex++] : undefined
 
             return [
-              `<question price="${question.price}">`,
+              `<question price="${question.price}"${question.type ? ` type="${escapeXml(question.type)}"` : ''}>`,
               this.createCommentsXml(question.comments),
               '<params><param name="question" type="content">',
               question.text.trim() ? `<item>${escapeXml(question.text.trim())}</item>` : '',
               questionMedia ? this.createMediaItemXml(questionMedia) : '',
-              '</param></params>',
-              `<right><answer>${escapeXml(question.answer.trim())}</answer></right>`,
+              '</param>',
+              this.createQuestionExtraParamsXml(question),
+              '</params>',
+              `<right>${[question.answer, ...(question.acceptedAnswers ?? [])]
+                .map((answer) => answer.trim())
+                .filter(Boolean)
+                .map((answer) => `<answer>${escapeXml(answer)}</answer>`)
+                .join('')}</right>`,
+              this.createWrongAnswersXml(question.wrongAnswers),
               '</question>'
             ].join('')
           }),
@@ -266,6 +273,34 @@ export class SiqPackageService {
     return `<item ${attributes.join(' ')}>${escapeXml(media.displayName)}</item>`
   }
 
+  private createQuestionExtraParamsXml(question: SiqPackageExportRequest['package']['rounds'][number]['themes'][number]['questions'][number]): string {
+    const params: string[] = []
+
+    if (question.answerType && question.answerType !== 'text') {
+      params.push(`<param name="answerType">${escapeXml(question.answerType)}</param>`)
+    }
+
+    if (question.answerOptions?.some((option) => option.trim())) {
+      params.push(`<param name="answerOptions">${escapeXml(question.answerOptions.map((option) => option.trim()).filter(Boolean).join('\n'))}</param>`)
+    }
+
+    if (question.answerDeviation?.trim()) {
+      params.push(`<param name="answerDeviation">${escapeXml(question.answerDeviation.trim())}</param>`)
+    }
+
+    return params.join('')
+  }
+
+  private createWrongAnswersXml(answers: string[] = []): string {
+    const cleanAnswers = answers.map((answer) => answer.trim()).filter(Boolean)
+
+    if (cleanAnswers.length === 0) {
+      return ''
+    }
+
+    return `<wrong>${cleanAnswers.map((answer) => `<answer>${escapeXml(answer)}</answer>`).join('')}</wrong>`
+  }
+
   private async parseContentXml(xml: string, entries: Array<{ path: string; data: Buffer }>, extractDirectory: string): Promise<SiqPackageDraft> {
     const packageOpen = xml.match(/<package\b[^>]*>/i)?.[0] ?? ''
     const packageDraft: SiqPackageDraft = {
@@ -318,11 +353,19 @@ export class SiqPackageService {
     for (const questionMatch of xml.matchAll(/<question\b([^>]*)>([\s\S]*?)<\/question>/gi)) {
       const questionBody = questionMatch[2]
       const parsedItems = await this.parseQuestionItems(questionBody, entries, extractDirectory)
+      const rightAnswers = readAnswers(questionBody, 'right')
+      const wrongAnswers = readAnswers(questionBody, 'wrong')
 
       questions.push({
         price: Number(getAttribute(questionMatch[1], 'price')) || 100,
+        type: getAttribute(questionMatch[1], 'type') as SiqPackageDraft['rounds'][number]['themes'][number]['questions'][number]['type'],
         text: parsedItems.text,
-        answer: unescapeXml(firstMatch(questionBody, /<answer>([\s\S]*?)<\/answer>/i)),
+        answer: rightAnswers[0] ?? '',
+        acceptedAnswers: rightAnswers.slice(1),
+        wrongAnswers,
+        answerType: getParamValue(questionBody, 'answerType') as SiqPackageDraft['rounds'][number]['themes'][number]['questions'][number]['answerType'],
+        answerOptions: getParamValue(questionBody, 'answerOptions').split(/\r?\n/).map((option) => option.trim()).filter(Boolean),
+        answerDeviation: getParamValue(questionBody, 'answerDeviation'),
         comments: readComments(questionBody),
         media: parsedItems.media
       })
@@ -454,6 +497,17 @@ function getAttribute(value: string, name: string): string | undefined {
 function readComments(value: string): string | undefined {
   const comments = unescapeXml(firstMatch(value, /<comments>([\s\S]*?)<\/comments>/i)).trim()
   return comments || undefined
+}
+
+function readAnswers(value: string, sectionName: 'right' | 'wrong'): string[] {
+  const section = firstMatch(value, new RegExp(`<${sectionName}>([\\s\\S]*?)<\\/${sectionName}>`, 'i'))
+
+  return [...section.matchAll(/<answer>([\s\S]*?)<\/answer>/gi)].map((match) => unescapeXml(match[1]).trim()).filter(Boolean)
+}
+
+function getParamValue(value: string, name: string): string {
+  const pattern = new RegExp(`<param\\b[^>]*name=["']${name}["'][^>]*>([\\s\\S]*?)<\\/param>`, 'i')
+  return unescapeXml(firstMatch(value, pattern)).trim()
 }
 
 function isSupportedMediaKind(value: string): value is SiqMediaKind {
